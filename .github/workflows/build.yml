@@ -33,34 +33,17 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up Java 17
+        id: java
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Install Android SDK
-        run: |
-          # Install Android command line tools
-          mkdir -p $HOME/android-sdk/cmdline-tools
-          cd $HOME/android-sdk/cmdline-tools
-
-          wget -q "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -O cmdline-tools.zip
-          unzip -q cmdline-tools.zip
-          mv cmdline-tools latest
-          rm cmdline-tools.zip
-
-          export ANDROID_HOME=$HOME/android-sdk
-          export ANDROID_SDK_ROOT=$HOME/android-sdk
-          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
-
-          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
-          echo "JAVA_HOME=${{ steps.setup-java.outputs.java-home }}" >> $GITHUB_ENV
-
-          # Accept licenses and install required SDK components
-          yes | sdkmanager --licenses 2>/dev/null || true
-          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-          echo "SDK setup complete"
+      - name: Set up Android SDK and accept licenses
+        uses: android-actions/setup-android@v3
+        with:
+          accept-licenses: true
+          components: platform-tools, platforms;android-34, build-tools;34.0.0
 
       - name: Create love file
         run: |
@@ -79,18 +62,13 @@ jobs:
           fi
           unzip -q /tmp/serviceman.zip -d /tmp/
           chmod +x /tmp/serviceman
-          /tmp/serviceman --version || true
 
       - name: Build APK
+        env:
+          JAVA_HOME: ${{ steps.java.outputs.java-home }}
         run: |
-          export ANDROID_HOME=$HOME/android-sdk
-          export ANDROID_SDK_ROOT=$HOME/android-sdk
-          export JAVA_HOME="${{ steps.setup-java.outputs.java-home }}"
-          export PATH=$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
-
           mkdir -p output
 
-          # Try with keystore env vars if provided, otherwise unsigned
           if [ -n "$KEYSTORE_B64" ]; then
             echo "$KEYSTORE_B64" | base64 -d > /tmp/keystore.jks
             /tmp/serviceman \
@@ -116,6 +94,7 @@ jobs:
           find output/ -name "*.apk" -exec ls -lh {} \;
 
       - name: Find built APK
+        id: apk
         run: |
           APK=$(find output/ -name "*.apk" 2>/dev/null | head -1)
           if [ -n "$APK" ]; then
@@ -142,6 +121,6 @@ jobs:
             echo "APK: \`${{ env.APK }}\`" >> $GITHUB_STEP_SUMMARY
             ls -lh "${{ env.APK }}"
           else
-            echo "Build failed — check logs above" >> $GITHUB_STEP_SUMMARY
+            echo "Build failed" >> $GITHUB_STEP_SUMMARY
             exit 1
           fi

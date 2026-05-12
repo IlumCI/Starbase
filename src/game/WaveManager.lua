@@ -151,7 +151,7 @@ function WM:onEnemyKilled()
     if self.waveEnemiesKilled >= self.waveEnemiesTotal and #self.spawnQueue == 0 then
         self.waveCleared = true
         self.waveActive = false
-        self.waveClearTime = self.waveClearTime + (os.clock() - self.waveStartTime)
+        self.waveClearTime = math.max(1, os.clock() - self.waveStartTime)
     end
 end
 
@@ -162,6 +162,15 @@ end
 function WM:onWaveStart()
     self.waveStartTime = os.clock()
     self.enemiesReachedEnd = 0
+end
+
+function WM:getWaveClearTime()
+    if self.waveActive then
+        -- Still running — estimate based on spawn clock
+        return math.max(1, os.clock() - self.waveStartTime)
+    else
+        return self.waveClearTime
+    end
 end
 
 function WM:isWaveClear()

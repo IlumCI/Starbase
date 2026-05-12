@@ -130,6 +130,7 @@ function GameLoop:startRun()
 
     -- Start wave 1
     self.waveManager:startNextWave(PS.run.wave)
+    self.waveManager:onWaveStart()
     self.waveStartGold = PS.run.gold
 
     self.showingMenu = false
@@ -241,7 +242,8 @@ function GameLoop:update(dt)
 
             if enemy.reachedEnd then
                 -- ML: record evasion failure
-                self.ml:onEnemyReachedEnd(enemy, self.projectiles)
+                self.ml:recordEvasionOutcome(enemy, self.projectiles, false)
+                self.waveManager:onEnemyReachedEnd()
 
                 if PS.run.shieldInstances > 0 then
                     PS.run.shieldInstances = PS.run.shieldInstances - 1
@@ -300,7 +302,7 @@ function GameLoop:update(dt)
             local enemiesKilled = PS.run.enemiesKilled
             local hpLeft = PS.run.hp
             local maxHP = C.BASE_HP
-            local clearTime = self.waveManager.waveClearTime or 60
+            local clearTime = self.waveManager:getWaveClearTime()
             local enemiesReached = self.waveManager.enemiesReachedEnd or 0
 
             self.ml:onWaveEnd(
@@ -487,11 +489,11 @@ function GameLoop:onUpgradeSelected(upgradeId)
 
     -- Apply new difficulty multipliers
     local mults = self.ml:getDifficultyMultipliers(PS.run.wave)
-    self.waveManager:applyMultipliers(mults)
-
-    self.waveManager:startNextWave(PS.run.wave)
-    self.waveStartGold = PS.run.gold
-    self.state = C.STATE.PLAYING
+            self.waveManager:applyMultipliers(mults)
+            self.waveManager:startNextWave(PS.run.wave)
+            self.waveManager:onWaveStart()
+            self.waveStartGold = PS.run.gold
+            self.state = C.STATE.PLAYING
 end
 
 function GameLoop:onPauseTap()

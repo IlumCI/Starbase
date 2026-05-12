@@ -311,25 +311,16 @@ function Enemy:update(dt, slowField, evadeDx, evadeDy, evadeStrength)
     -- Movement along path
     local movement = (speed / self.pathLength) * dt
 
-    -- Apply ML evasion steering (perpendicular to path)
-    if evadeDx and evadeDy and evadeStrength and evadeStrength > 0 then
-        -- Scale evasion by strength, cap it
-        local strength = math.min(evadeStrength, 80)
-        self.x = self.x + evadeDx * strength * dt
-        self.y = self.y + evadeDy * strength * dt
-    end
-    if ml and projectiles then
-        -- Get path direction at current progress
-        local pathDirX, pathDirY = self:_getPathDirection()
-        evadeX, evadeY = ml:computeEvasion(self, projectiles, pathDirX, pathDirY, dt)
-    end
-
-    -- Movement along path
-    local movement = (speed / self.pathLength) * dt
-
     -- Apply ML evasion steering (small perpendicular displacement)
     -- Scale evasion to be subtle (doesn't override path following)
-    local evadeScale = dt * 30
+    local evadeScale = 1
+    local ex, ey = 0, 0
+    if evadeDx and evadeDy and evadeStrength and evadeStrength > 0.01 then
+        local strength = math.min(evadeStrength, 1.0)
+        ex, ey = evadeDx * strength, evadeDy * strength
+        evadeScale = dt * 30
+    end
+
     self.progress = self.progress + movement
 
     if self.progress >= 1 then
@@ -339,8 +330,8 @@ function Enemy:update(dt, slowField, evadeDx, evadeDy, evadeStrength)
         self.y = self.waypoints[#self.waypoints].y
     else
         local pos = Path.getPositionAtProgress(self.progress, self.waypoints)
-        self.x = pos.x + evadeX * evadeScale
-        self.y = pos.y + evadeY * evadeScale
+        self.x = pos.x + ex * evadeScale
+        self.y = pos.y + ey * evadeScale
     end
 
     -- Clamp to screen bounds
