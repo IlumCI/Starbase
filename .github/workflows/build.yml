@@ -10,7 +10,7 @@ on:
         required: false
         default: 'Zen Fortress'
       package:
-        description: 'Package name (e.g. com.ilum.zenfortress)'
+        description: 'Package name'
         required: false
         default: 'com.ilum.zenfortress'
       version:
@@ -26,7 +26,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 30
 
     steps:
       - name: Checkout code
@@ -39,88 +39,77 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Android SDK and accept licenses
-        uses: android-actions/setup-android@v3
-        with:
-          accept-licenses: true
-          components: platform-tools, platforms;android-34, build-tools;34.0.0
-
-      - name: Create love file
-        run: |
-          cd src
-          zip -r ../game.love .
-          cd ..
-          echo "Created game.love ($(du -h game.love | cut -f1))"
-
-      - name: Download love-android-serviceman
-        run: |
-          ARCH=$(uname -m)
-          if [ "$ARCH" = "x86_64" ]; then
-            wget -q "https://github.com/love2d-community/love-android-serviceman/releases/download/continuous/serviceman-x86_64-linux.zip" -O /tmp/serviceman.zip
-          else
-            wget -q "https://github.com/love2d-community/love-android-serviceman/releases/download/continuous/serviceman-aarch64-linux.zip" -O /tmp/serviceman.zip
-          fi
-          unzip -q /tmp/serviceman.zip -d /tmp/
-          chmod +x /tmp/serviceman
-
-      - name: Build APK
+      - name: Build APK via love-android gradle template
         env:
           JAVA_HOME: ${{ steps.java.outputs.java-home }}
         run: |
-          mkdir -p output
+          set -e
+          echo "JAVA_HOME=$JAVA_HOME"
 
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "$KEYSTORE_B64" | base64 -d > /tmp/keystore.jks
-            /tmp/serviceman \
-              --app-name "$APP_NAME" \
-              --package "$PACKAGE" \
-              --version "$VERSION" \
-              --input game.love \
-              --output-dir output/ \
-              --keystore /tmp/keystore.jks \
-              --keystore-release-alias "$KEY_ALIAS" \
-              --keystore-release-key-pass "$KEY_PASS" \
-              --keystore-release-pass "$KEYSTORE_PASS"
-          else
-            /tmp/serviceman \
-              --app-name "$APP_NAME" \
-              --package "$PACKAGE" \
-              --version "$VERSION" \
-              --input game.love \
-              --output-dir output/
+          # Ubuntu-latest already has Android SDK at this path
+          export ANDROID_HOME=/usr/local/lib/android/sdk
+          export ANDROID_SDK_ROOT=$ANDROID_HOME
+          export PATH=$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
+
+          echo "Android SDK: $ANDROID_HOME"
+          ls $ANDROID_HOME/
+
+          # Accept SDK licenses
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
+
+          # Clone love-android template (no submodules = fast)
+          git clone --depth 1 https://github.com/love2d-community/love-android.git /tmp/love-android
+
+          # Inject game.love into template assets
+          mkdir -p /tmp/love-android/game/src/main/assets
+          cd src
+          zip -r /tmp/love-android/game/src/main/assets/game.love .
+          cd ..
+
+          echo "game.love size: $(du -h /tmp/love-android/game/src/main/assets/game.love | cut -f1)"
+
+          # Configure gradle.properties
+          cd /tmp/love-android/game
+          echo "APP_NAME=$APP_NAME" >> gradle.properties
+          echo "PACKAGE_NAME=$PACKAGE" >> gradle.properties
+          echo "VERSION_NAME=$VERSION" >> gradle.properties
+
+          # Build release APK
+          ./gradlew assembleRelease --no-daemon -q 2>&1 | tail -5
+
+          # Find APK
+          APK=$(find . -path "*/build/outputs/apk/*/release/*.apk" 2>/dev/null | head -1)
+          if [ -z "$APK" ]; then
+            APK=$(find . -name "*.apk" -newer /tmp/love-android/game/build.gradle 2>/dev/null | head -1)
           fi
 
-          echo "=== APK files ==="
-          find output/ -name "*.apk" -exec ls -lh {} \;
-
-      - name: Find built APK
-        id: apk
-        run: |
-          APK=$(find output/ -name "*.apk" 2>/dev/null | head -1)
-          if [ -n "$APK" ]; then
-            echo "APK=$APK" >> $GITHUB_ENV
-            echo "APK found: $APK ($(du -h $APK | cut -f1))"
+          if [ -n "$APK" ] && [ -f "$APK" ]; then
+            echo "APK: $APK ($(du -h $APK | cut -f1))"
+            mkdir -p $GITHUB_WORKSPACE/output
+            cp "$APK" $GITHUB_WORKSPACE/output/
           else
-            echo "No APK found in output/"
-            find output/ -type f | head -20
+            echo "APK not found, checking build outputs:"
+            find . -name "*.apk" 2>/dev/null
+            find . -path "*/build/outputs/*" 2>/dev/null | head -20
             exit 1
           fi
 
       - name: Upload APK artifact
-        if: env.APK != ''
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.APP_NAME }}-${{ github.run_number }}
-          path: ${{ env.APK }}
+          path: output/*.apk
           retention-days: 14
 
       - name: Summary
         run: |
-          if [ -n "${{ env.APK }}" ]; then
+          if ls output/*.apk 1>/dev/null 2>&1; then
             echo "### Build Succeeded" >> $GITHUB_STEP_SUMMARY
-            echo "APK: \`${{ env.APK }}\`" >> $GITHUB_STEP_SUMMARY
-            ls -lh "${{ env.APK }}"
+            echo "" >> $GITHUB_STEP_SUMMARY
+            for f in output/*.apk; do
+              echo "- \`$(basename $f)\` ($(du -h "$f" | cut -f1))" >> $GITHUB_STEP_SUMMARY
+            done
           else
-            echo "Build failed" >> $GITHUB_STEP_SUMMARY
+            echo "Build failed — check logs" >> $GITHUB_STEP_SUMMARY
             exit 1
           fi
