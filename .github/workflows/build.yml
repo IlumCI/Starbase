@@ -57,8 +57,8 @@ jobs:
           # Accept SDK licenses
           yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
 
-          # Clone love-android template (no submodules = fast)
-          git clone --depth 1 https://github.com/love2d-community/love-android.git /tmp/love-android
+          # Clone love-android template (gh is pre-authenticated in Actions)
+          gh repo clone love2d-community/love-android /tmp/love-android -- -q
 
           # Inject game.love into template assets
           mkdir -p /tmp/love-android/game/src/main/assets
