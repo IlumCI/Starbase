@@ -1,104 +1,62 @@
 # Zen Fortress
 
-An infinite auto-battler tower defense game built with Solar2D (Lua).
+Infinite auto-battler tower defense for Android. Built with LÖVE2D.
 
-## Project Structure
+## Game
 
-```
-zen-game/
-├── SPEC.md                  ← Full game design specification
-├── config.lua               ← Solar2D display configuration
-├── build.settings           ← Android build settings
-├── src/
-│   ├── main.lua             ← Entry point
-│   ├── consts.lua           ← All magic numbers
-│   ├── game/
-│   │   ├── GameLoop.lua     ← Core state machine
-│   │   ├── WaveManager.lua  ← Wave spawning
-│   │   ├── Enemy.lua        ← Enemy entities
-│   │   ├── Turret.lua       ← Turret entities
-│   │   ├── Projectile.lua   ← Projectile entities
-│   │   ├── Path.lua         ← Enemy path waypoints
-│   │   └── UpgradeSystem.lua ← Roguelike upgrades
-│   ├── meta/
-│   │   ├── Persistence.lua  ← JSON save/load
-│   │   └── PlayerState.lua   ← Player + run state
-│   └── ui/
-│       ├── HUD.lua
-│       ├── MainMenu.lua
-│       ├── PauseMenu.lua
-│       └── UpgradeScreen.lua
-└── assets/                  ← (add audio files here)
-```
+- Wave-based tower defense with roguelike progression
+- 4 turret types: Blaster, Cannon, Sniper, Zapper
+- 4 enemy types: Grunt, Tank, Speedster, Boss
+- Between waves: choose from 3 upgrades (temp or permanent)
+- Bank gold between runs to level up turrets
+- Runs are infinite -- survive as long as you can
 
-## Building for Android
-
-### Option 1: Solar2D Corona Simulator (GUI)
-
-1. Install [Solar2D](https://solar2d.com/) (formerly Corona SDK)
-2. `git clone` this repo, or copy the `zen-game/` folder
-3. Open Solar2D Simulator
-4. File → Open → select `zen-game/` folder
-5. File → Build → Android → fill in package name, keystore, etc.
-
-### Option 2: Command Line (Corona Builder)
+## Dev
 
 ```bash
-# Install Corona CLI tools
-wget https://developer.coronalabs.com/downloads/coronasdk-linux
-chmod +x coronasdk-linux
-sudo mv coronasdk-linux /usr/local/bin/corona
+# Install LÖVE2D
+# Ubuntu: sudo apt install love
+# macOS: brew install love
+# Windows: https://love2d.org
 
-# Build
-corona build build.settings zen-game
+# Run locally
+love src/
+
+# Build .love for packaging
+cd src && zip -r ../game.love . && cd ..
 ```
 
-### Option 3: Termux (local build, requires X11)
+## Build APK
 
-```bash
-# Install Solar2D for Linux
-wget https://solar2d.org/downloads/Solar2D-Linux-2024.3604.tar.gz
-tar xzf Solar2D-Linux-2024.3604.tar.gz
-cd Solar2D-Linux-2024.3604
-./solar2d
+Push to `main` branch on GitHub -- the `build.yml` workflow:
+1. Zips all Lua files into `game.love`
+2. Builds APK with `love-android-serviceman`
+3. Downloads the artifact from Actions
 
-# Or use the Android NDK + Solar2D makefile approach
+To trigger manually: Actions tab → Build Android APK → Run workflow
+
+## Project structure
+
 ```
-
-### Build Checklist
-
-1. Add audio files to `assets/audio/` (optional — game works without):
-   - `fire.wav` — turret shot
-   - `death.wav` — enemy death
-   - `upgrade.wav` — upgrade select
-   - `boss.wav` — boss spawn
-   - `ambient.wav` — background drone
-2. Edit `build.settings` — set your `package` name and signing keystore
-3. Edit `config.lua` — adjust display dimensions if needed
-4. Build for Android APK
-
-## Running
-
-- After build: install the APK on Android device
-- Touch `START RUN` to begin
-- Turrets auto-fire — watch and enjoy
-- After each wave: pick 1 of 3 upgrades
-- No game over — quit anytime and progress is banked
-
-## Development
-
-- All game logic is in `src/`
-- Magic numbers in `src/consts.lua` — tweak there first
-- Enemy types in `src/consts.lua` → `C.ENEMY`
-- Turret types in `src/consts.lua` → `C.TURRET`
-- Upgrades in `src/game/UpgradeSystem.lua` → `US.DEFS`
-- Save file: `Documents/zen_fortress_save.json`
-
-## Key Design Decisions
-
-- No manual turret placement — turrets auto-position on fixed anchors
-- Roguelike upgrade selection after each wave
-- Infinite runs — no game over, no win condition
-- Permanent progression via player level + turret upgrades + permanent upgrades
-- Minimalist aesthetic — geometric shapes, muted dark palette, cyan/red/gold accents
-- Solar2D — Lua, cross-platform, free (MIT)
+src/
+├── main.lua              -- LÖVE entry point
+├── conf.lua              -- LÖVE config
+├── consts.lua            -- All game constants
+├── lib/dkjson.lua        -- JSON encoder/decoder
+├── game/
+│   ├── GameLoop.lua      -- State machine + entity management
+│   ├── Path.lua          -- Enemy waypoints
+│   ├── WaveManager.lua   -- Wave spawning logic
+│   ├── Enemy.lua         -- Enemy entity
+│   ├── Turret.lua        -- Turret entity
+│   ├── Projectile.lua   -- Projectile entity
+│   ├── UpgradeSystem.lua -- Upgrade definitions + selection
+│   └── meta/
+│       ├── Persistence.lua  -- Save/load
+│       └── PlayerState.lua  -- Player data
+└── ui/
+    ├── HUD.lua            -- In-game HUD
+    ├── MainMenu.lua       -- Menu + turret upgrades
+    ├── PauseMenu.lua      -- Pause overlay
+    └── UpgradeScreen.lua  -- Upgrade card selection
+```

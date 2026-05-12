@@ -1,4 +1,4 @@
--- Turret: one turret entity with layered geometric visuals
+-- Turret: one turret entity with layered geometric visuals (LÖVE2D canvas-based)
 local C = require("consts")
 
 local Turret = {}
@@ -19,17 +19,19 @@ function Turret.new(towerTypeKey, anchorX, anchorY)
     self.turretLevel = 1
     self.pulseTime = math.random() * math.pi * 2
 
-    -- Compute stats
+    -- Computed stats
     self:recomputeStats()
 
-    -- Display
-    self.group = display.newGroup()
-    self.group.x = self.x
-    self.group.y = self.y
-    self:buildVisuals()
+    -- Barrel angle (radians)
+    self.barrelAngle = 0
+    self.energyRingAngle = 0
 
-    -- Targeting laser
-    self.targetLine = nil
+    -- Muzzle flash flag (handled by GameLoop)
+    self.muzzleFlashTimer = 0
+
+    -- Canvas
+    self.canvas = love.graphics.newCanvas(C.WIDTH, C.HEIGHT)
+    self:buildVisuals()
 
     return self
 end
@@ -60,285 +62,285 @@ function Turret:buildVisuals()
     local c = self.def.color
     local cr, cg, cb = c[1], c[2], c[3]
 
-    -- Range ring (subtle background)
-    self.rangeRing = display.newCircle(self.group, 0, 0, self.range)
-    self.rangeRing:setStrokeColor(1, 1, 1, 0.06)
-    self.rangeRing.strokeWidth = 1
-    self.rangeRing:setFillColor(0, 0, 0, 0.04)
+    self.canvas:renderTo(function()
+        love.graphics.clear()
 
-    -- Outer energy field (subtle rotating ring)
-    self.energyRing = display.newCircle(self.group, 0, 0, r + 16)
-    self.energyRing:setStrokeColor(cr, cg, cb, 0.25)
-    self.energyRing.strokeWidth = 1.5
-    self.energyRing:setFillColor(0, 0, 0, 0)
+        -- Render everything centered on canvas
+        love.graphics.setBlendMode("alpha")
+        love.graphics.push()
+        love.graphics.translate(C.WIDTH / 2, C.HEIGHT / 2)
 
-    -- Second outer ring (offset)
-    self.energyRing2 = display.newCircle(self.group, 0, 0, r + 22)
-    self.energyRing2:setStrokeColor(cr, cg, cb, 0.15)
-    self.energyRing2.strokeWidth = 1
-    self.energyRing2:setFillColor(0, 0, 0, 0)
+        -- Range ring
+        love.graphics.setColor(1, 1, 1, 0.06)
+        love.graphics.setLineWidth(1)
+        love.graphics.circle("line", 0, 0, self.range)
+        love.graphics.setColor(0, 0, 0, 0.04)
+        love.graphics.circle("fill", 0, 0, self.range)
 
-    -- Base platform (ground shadow)
-    self.basePlatform = display.newCircle(self.group, 0, 4, r + 12)
-    self.basePlatform:setFillColor(0, 0, 0, 0.25)
+        -- Energy rings (animated via pulseTime)
+        local pulseScale1 = 1 + math.sin(self.pulseTime * 1.5) * 0.05
+        love.graphics.setColor(cr, cg, cb, 0.25)
+        love.graphics.setLineWidth(1.5)
+        love.graphics.push()
+        love.graphics.rotate(self.energyRingAngle)
+        love.graphics.scale(pulseScale1, pulseScale1)
+        love.graphics.circle("line", 0, 0, r + 16)
+        love.graphics.pop()
 
-    -- Turret-specific visuals
-    if self.typeKey == "BLASTER" then
-        self:buildBlaster(cr, cg, cb, r)
-    elseif self.typeKey == "CANNON" then
-        self:buildCannon(cr, cg, cb, r)
-    elseif self.typeKey == "SNIPER" then
-        self:buildSniper(cr, cg, cb, r)
-    elseif self.typeKey == "ZAPPER" then
-        self:buildZapper(cr, cg, cb, r)
-    end
+        local pulseScale2 = 1 + math.cos(self.pulseTime * 1.5) * 0.05
+        love.graphics.setColor(cr, cg, cb, 0.15)
+        love.graphics.setLineWidth(1)
+        love.graphics.push()
+        love.graphics.rotate(-self.energyRingAngle * 0.7)
+        love.graphics.scale(pulseScale2, pulseScale2)
+        love.graphics.circle("line", 0, 0, r + 22)
+        love.graphics.pop()
 
-    -- Targeting line (built in update)
+        -- Base platform (shadow)
+        love.graphics.setColor(0, 0, 0, 0.25)
+        love.graphics.circle("fill", 0, 4, r + 12)
+
+        -- Type-specific body (barrel will be rendered on top)
+        if self.typeKey == "BLASTER" then
+            self:renderBlaster(cr, cg, cb, r)
+        elseif self.typeKey == "CANNON" then
+            self:renderCannon(cr, cg, cb, r)
+        elseif self.typeKey == "SNIPER" then
+            self:renderSniper(cr, cg, cb, r)
+        elseif self.typeKey == "ZAPPER" then
+            self:renderZapper(cr, cg, cb, r)
+        end
+
+        -- Barrel (rotates toward target)
+        self:renderBarrel(cr, cg, cb, r)
+
+        -- Core glow
+        love.graphics.setColor(cr, cg, cb, 0.9)
+        love.graphics.circle("fill", 0, 0, r * 0.2)
+
+        love.graphics.pop()
+    end)
 end
 
-function Turret:buildBlaster(cr, cg, cb, r)
-    -- Layered concentric circles
-    local outerRing = display.newCircle(self.group, 0, 0, r + 3)
-    outerRing:setStrokeColor(cr, cg, cb, 0.6)
-    outerRing.strokeWidth = 2
-    outerRing:setFillColor(0, 0, 0, 0)
-
-    -- Dashed effect (small segments)
+function Turret:renderBlaster(cr, cg, cb, r)
+    -- Dashed ring segments
     for i = 0, 7 do
         local angle = (i / 8) * math.pi * 2
-        local dot = display.newCircle(self.group,
+        love.graphics.setColor(cr, cg, cb, 0.5)
+        love.graphics.circle("fill",
             math.cos(angle) * (r + 8),
             math.sin(angle) * (r + 8),
-            2.5)
-        dot:setFillColor(cr, cg, cb, 0.5)
+            2.5
+        )
     end
 
+    -- Outer ring
+    love.graphics.setColor(cr, cg, cb, 0.6)
+    love.graphics.setLineWidth(2)
+    love.graphics.circle("line", 0, 0, r + 3)
+
     -- Main body
-    self.mainBody = display.newCircle(self.group, 0, 0, r)
-    self.mainBody:setFillColor(cr * 0.15, cg * 0.15, cb * 0.15)
-    self.mainBody:setStrokeColor(cr, cg, cb, 0.9)
-    self.mainBody.strokeWidth = 2
+    love.graphics.setColor(cr * 0.15, cg * 0.15, cb * 0.15)
+    love.graphics.circle("fill", 0, 0, r)
+    love.graphics.setColor(cr, cg, cb, 0.9)
+    love.graphics.setLineWidth(2)
+    love.graphics.circle("line", 0, 0, r)
 
-    -- Inner fill gradient (lighter center)
-    local inner = display.newCircle(self.group, 0, 0, r * 0.7)
-    inner:setFillColor(cr * 0.25, cg * 0.25, cb * 0.25)
-
-    -- Barrel (line extending outward)
-    self.barrel = display.newLine(self.group, 0, 0, r, 0)
-    self.barrel:setStrokeColor(cr, cg, cb, 1)
-    self.barrel.strokeWidth = 4
-    self.barrel.curWidth = 4
-
-    -- Barrel tip glow
-    self.barrelTip = display.newCircle(self.group, r, 0, 4)
-    self.barrelTip:setFillColor(cr, cg, cb)
-
-    -- Energy core
-    self.core = display.newCircle(self.group, 0, 0, r * 0.3)
-    self.core:setFillColor(cr, cg, cb, 0.8)
+    -- Inner fill
+    love.graphics.setColor(cr * 0.25, cg * 0.25, cb * 0.25)
+    love.graphics.circle("fill", 0, 0, r * 0.7)
 
     -- Core ring
-    local coreRing = display.newCircle(self.group, 0, 0, r * 0.4)
-    coreRing:setStrokeColor(cr, cg, cb, 0.6)
-    coreRing.strokeWidth = 1
-    coreRing:setFillColor(0, 0, 0, 0)
+    love.graphics.setColor(cr, cg, cb, 0.6)
+    love.graphics.setLineWidth(1)
+    love.graphics.circle("line", 0, 0, r * 0.4)
 end
 
-function Turret:buildCannon(cr, cg, cb, r)
-    -- Square base
-    self.mainBody = display.newRect(self.group, 0, 0, r * 2, r * 2)
-    self.mainBody:setFillColor(cr * 0.1, cg * 0.1, cb * 0.1)
-    self.mainBody:setStrokeColor(cr, cg, cb, 0.8)
-    self.mainBody.strokeWidth = 2
+function Turret:renderCannon(cr, cg, cb, r)
+    local size = r * 2
 
-    -- Diagonal lines on body
-    local d1 = display.newLine(self.group, -r * 0.7, -r * 0.7, r * 0.7, r * 0.7)
-    d1:setStrokeColor(cr, cg, cb, 0.3)
-    d1.strokeWidth = 1.5
-    local d2 = display.newLine(self.group, r * 0.7, -r * 0.7, -r * 0.7, r * 0.7)
-    d2:setStrokeColor(cr, cg, cb, 0.3)
-    d2.strokeWidth = 1.5
+    -- Inner glow (rotated square)
+    love.graphics.setColor(cr, cg, cb, 0.1)
+    love.graphics.push()
+    love.graphics.rotate(math.pi / 4)
+    love.graphics.rectangle("fill", -r * 0.7, -r * 0.7, r * 1.4, r * 1.4)
+    love.graphics.pop()
+
+    -- Main square body
+    love.graphics.setColor(cr * 0.1, cg * 0.1, cb * 0.1)
+    love.graphics.rectangle("fill", -r, -r, size, size)
+    love.graphics.setColor(cr, cg, cb, 0.8)
+    love.graphics.setLineWidth(2)
+    love.graphics.rectangle("line", -r, -r, size, size)
+
+    -- Diagonal cross pattern
+    love.graphics.setColor(cr, cg, cb, 0.3)
+    love.graphics.setLineWidth(1.5)
+    love.graphics.line(-r * 0.7, -r * 0.7, r * 0.7, r * 0.7)
+    love.graphics.line(r * 0.7, -r * 0.7, -r * 0.7, r * 0.7)
 
     -- Corner accents
+    love.graphics.setColor(cr, cg, cb, 0.7)
     for dx = -1, 1, 2 do
         for dy = -1, 1, 2 do
-            local corner = display.newCircle(self.group, dx * r * 0.7, dy * r * 0.7, 3)
-            corner:setFillColor(cr, cg, cb, 0.7)
+            love.graphics.circle("fill", dx * r * 0.7, dy * r * 0.7, 3)
         end
     end
 
-    -- Wide barrel
-    self.barrel = display.newRect(self.group, r * 0.5, 0, r * 1.2, r * 0.6)
-    self.barrel:setFillColor(cr * 0.3, cg * 0.3, cb * 0.3)
-    self.barrel:setStrokeColor(cr, cg, cb, 1)
-    self.barrel.strokeWidth = 1.5
-
-    -- Barrel opening
-    self.barrelTip = display.newCircle(self.group, r * 1.7, 0, r * 0.35)
-    self.barrelTip:setFillColor(cr, cg, cb)
-
-    -- Inner glow
-    local innerGlow = display.newRect(self.group, 0, 0, r * 1.4, r * 1.4)
-    innerGlow:setFillColor(cr, cg, cb, 0.1)
-    innerGlow.rotation = 45
-
     -- Cross symbol
-    local cross = display.newLine(self.group, -r * 0.3, 0, r * 0.3, 0)
-    cross:setStrokeColor(cr, cg, cb, 0.5)
-    cross.strokeWidth = 2
-    local crossV = display.newLine(self.group, 0, -r * 0.3, 0, r * 0.3)
-    crossV:setStrokeColor(cr, cg, cb, 0.5)
-    crossV.strokeWidth = 2
+    love.graphics.setColor(cr, cg, cb, 0.5)
+    love.graphics.setLineWidth(2)
+    love.graphics.line(-r * 0.3, 0, r * 0.3, 0)
+    love.graphics.line(0, -r * 0.3, 0, r * 0.3)
 end
 
-function Turret:buildSniper(cr, cg, cb, r)
-    -- Diamond shape
-    local pts = { 0, -r, r, 0, 0, r, -r, 0 }
-    self.mainBody = display.newPolygon(self.group, 0, 0, pts)
-    self.mainBody:setFillColor(cr * 0.08, cg * 0.08, cb * 0.08)
-    self.mainBody:setStrokeColor(cr, cg, cb, 0.8)
-    self.mainBody.strokeWidth = 2
+function Turret:renderSniper(cr, cg, cb, r)
+    -- Outer concentric diamond rings
+    local function diamondLine(sz, alpha)
+        love.graphics.setColor(cr, cg, cb, alpha)
+        love.graphics.setLineWidth(1)
+        love.graphics.polygon("line",
+            0, -sz, sz, 0, 0, sz, -sz, 0
+        )
+    end
+    diamondLine(r, 0.3)
 
-    -- Long barrel (extending up)
-    self.barrel = display.newLine(self.group, 0, -r * 0.3, 0, -r * 2.2)
-    self.barrel:setStrokeColor(cr, cg, cb, 1)
-    self.barrel.strokeWidth = 3
-
-    -- Scope (small circle at top of barrel)
-    self.barrelTip = display.newCircle(self.group, 0, -r * 2.2, r * 0.3)
-    self.barrelTip:setFillColor(cr, cg, cb)
-    local scopeRing = display.newCircle(self.group, 0, -r * 2.2, r * 0.4)
-    scopeRing:setStrokeColor(cr, cg, cb, 0.6)
-    scopeRing.strokeWidth = 1
-    scopeRing:setFillColor(0, 0, 0, 0)
+    -- Main diamond body
+    love.graphics.setColor(cr * 0.08, cg * 0.08, cb * 0.08)
+    love.graphics.polygon("fill",
+        0, -r, r, 0, 0, r, -r, 0
+    )
+    love.graphics.setColor(cr, cg, cb, 0.8)
+    love.graphics.setLineWidth(2)
+    love.graphics.polygon("line",
+        0, -r, r, 0, 0, r, -r, 0
+    )
 
     -- Crosshair inside diamond
-    local hLine = display.newLine(self.group, -r * 0.5, 0, r * 0.5, 0)
-    hLine:setStrokeColor(cr, cg, cb, 0.5)
-    hLine.strokeWidth = 1.5
-    local vLine = display.newLine(self.group, 0, -r * 0.5, 0, r * 0.5)
-    vLine:setStrokeColor(cr, cg, cb, 0.5)
-    vLine.strokeWidth = 1.5
+    love.graphics.setColor(cr, cg, cb, 0.5)
+    love.graphics.setLineWidth(1.5)
+    love.graphics.line(-r * 0.5, 0, r * 0.5, 0)
+    love.graphics.line(0, -r * 0.5, 0, r * 0.5)
 
-    -- Concentric diamond rings
-    local innerPts = { 0, -r * 0.6, r * 0.6, 0, 0, r * 0.6, -r * 0.6, 0 }
-    local inner = display.newPolygon(self.group, 0, 0, innerPts)
-    inner:setStrokeColor(cr, cg, cb, 0.3)
-    inner.strokeWidth = 1
-    inner:setFillColor(0, 0, 0, 0)
-
-    -- Tick marks on outer diamond
+    -- Tick marks on diamond corners
     for i = 0, 3 do
         local angle = (i / 4) * math.pi * 2 - math.pi / 2
-        local outerPts2 = { 0, -r, r, 0, 0, r, -r, 0 }
-        -- Inner tick
         local tx = math.cos(angle) * r * 0.75
         local ty = math.sin(angle) * r * 0.75
-        local tick = display.newCircle(self.group, tx, ty, 2.5)
-        tick:setFillColor(cr, cg, cb, 0.7)
+        love.graphics.setColor(cr, cg, cb, 0.7)
+        love.graphics.circle("fill", tx, ty, 2.5)
     end
 
-    -- Energy core
-    self.core = display.newCircle(self.group, 0, 0, r * 0.2)
-    self.core:setFillColor(cr, cg, cb, 0.9)
+    -- Scope ring
+    love.graphics.setColor(cr, cg, cb, 0.6)
+    love.graphics.setLineWidth(1)
+    love.graphics.circle("line", 0, -r * 2.2, r * 0.4)
 end
 
-function Turret:buildZapper(cr, cg, cb, r)
-    -- Triangle body (pointing up)
-    local pts = { 0, -r, r * 0.866, r * 0.5, -r * 0.866, r * 0.5 }
-    self.mainBody = display.newPolygon(self.group, 0, 0, pts)
-    self.mainBody:setFillColor(cr * 0.1, cg * 0.1, cb * 0.1)
-    self.mainBody:setStrokeColor(cr, cg, cb, 0.8)
-    self.mainBody.strokeWidth = 2
+function Turret:renderZapper(cr, cg, cb, r)
+    -- Outer triangle ring
+    love.graphics.setColor(cr, cg, cb, 0.3)
+    love.graphics.setLineWidth(1.5)
+    love.graphics.polygon("line",
+        0, -(r + 8),
+        (r + 8) * 0.866, (r + 8) * 0.5,
+        -(r + 8) * 0.866, (r + 8) * 0.5
+    )
 
-    -- Lightning bolt shape inside
-    local bolt = display.newLine(self.group, -r * 0.2, -r * 0.4, r * 0.1, 0, -r * 0.1, 0, r * 0.2, r * 0.4)
-    bolt:setStrokeColor(cr, cg, cb, 0.8)
-    bolt.strokeWidth = 2
+    -- Arc dots on outer ring
+    for i = 0, 2 do
+        local angle = (i / 3) * math.pi * 2 - math.pi / 2
+        local ax = math.cos(angle) * (r + 12)
+        local ay = math.sin(angle) * (r + 12)
+        love.graphics.setColor(cr, cg, cb, 0.4)
+        love.graphics.circle("fill", ax, ay, 2)
+    end
+
+    -- Main triangle body
+    love.graphics.setColor(cr * 0.1, cg * 0.1, cb * 0.1)
+    love.graphics.polygon("fill",
+        0, -r, r * 0.866, r * 0.5, -r * 0.866, r * 0.5
+    )
+    love.graphics.setColor(cr, cg, cb, 0.8)
+    love.graphics.setLineWidth(2)
+    love.graphics.polygon("line",
+        0, -r, r * 0.866, r * 0.5, -r * 0.866, r * 0.5
+    )
+
+    -- Lightning bolt shape
+    love.graphics.setColor(cr, cg, cb, 0.8)
+    love.graphics.setLineWidth(2)
+    love.graphics.line(-r * 0.2, -r * 0.4, r * 0.1, 0)
+    love.graphics.line(r * 0.1, 0, -r * 0.1, 0)
+    love.graphics.line(-r * 0.1, 0, r * 0.2, r * 0.4)
 
     -- Inner triangle
-    local innerPts = { 0, -r * 0.5, r * 0.4, r * 0.25, -r * 0.4, r * 0.25 }
-    local inner = display.newPolygon(self.group, 0, 0, innerPts)
-    inner:setFillColor(cr * 0.05, cg * 0.05, cb * 0.05)
-    inner:setStrokeColor(cr, cg, cb, 0.4)
-    inner.strokeWidth = 1
+    love.graphics.setColor(cr * 0.05, cg * 0.05, cb * 0.05)
+    love.graphics.setLineWidth(1)
+    love.graphics.polygon("fill",
+        0, -r * 0.5, r * 0.4, r * 0.25, -r * 0.4, r * 0.25
+    )
+    love.graphics.setColor(cr, cg, cb, 0.4)
+    love.graphics.polygon("line",
+        0, -r * 0.5, r * 0.4, r * 0.25, -r * 0.4, r * 0.25
+    )
 
     -- Energy dots on edges
     for i = 0, 2 do
         local angle = (i / 3) * math.pi * 2 - math.pi / 2
-        local dot = display.newCircle(self.group,
+        love.graphics.setColor(cr, cg, cb, 0.6)
+        love.graphics.circle("fill",
             math.cos(angle) * r * 0.8,
             math.sin(angle) * r * 0.8,
-            3)
-        dot:setFillColor(cr, cg, cb, 0.6)
+            3
+        )
     end
-
-    -- Outer triangle ring
-    local outerPts = { 0, -r - 8, (r + 8) * 0.866, (r + 8) * 0.5, -(r + 8) * 0.866, (r + 8) * 0.5 }
-    local outer = display.newPolygon(self.group, 0, 0, outerPts)
-    outer:setStrokeColor(cr, cg, cb, 0.3)
-    outer.strokeWidth = 1.5
-    outer:setFillColor(0, 0, 0, 0)
-
-    -- Arc segments
-    for i = 0, 2 do
-        local angle = (i / 3) * math.pi * 2 - math.pi / 2
-        local arcX = math.cos(angle) * (r + 12)
-        local arcY = math.sin(angle) * (r + 12)
-        local arcDot = display.newCircle(self.group, arcX, arcY, 2)
-        arcDot:setFillColor(cr, cg, cb, 0.4)
-    end
-
-    -- Barrel (shoots from top)
-    self.barrel = display.newLine(self.group, 0, -r * 0.5, 0, -r * 1.5)
-    self.barrel:setStrokeColor(cr, cg, cb, 1)
-    self.barrel.strokeWidth = 3
-    self.barrelTip = display.newCircle(self.group, 0, -r * 1.5, 3.5)
-    self.barrelTip:setFillColor(cr, cg, cb)
-
-    -- Core
-    self.core = display.newCircle(self.group, 0, 0, r * 0.2)
-    self.core:setFillColor(cr, cg, cb, 0.9)
 end
 
-function Turret:update(dt, enemies, projectiles, gameState)
-    self.cooldown = self.cooldown - dt
+function Turret:renderBarrel(cr, cg, cb, r)
+    love.graphics.setColor(cr, cg, cb)
+    love.graphics.setLineWidth(4)
+    love.graphics.line(0, 0, math.cos(self.barrelAngle) * r, math.sin(self.barrelAngle) * r)
+    love.graphics.setLineWidth(1)
+    love.graphics.circle("fill", math.cos(self.barrelAngle) * r, math.sin(self.barrelAngle) * r, 4)
+end
+
+function Turret:update(dt, enemies, projectiles, gameLoop)
+    -- Cooldown
+    if self.cooldown > 0 then
+        self.cooldown = self.cooldown - dt
+    end
     if self.cooldown < 0 then self.cooldown = 0 end
+
+    -- Pulse animation
     self.pulseTime = self.pulseTime + dt * 2.5
+    self.energyRingAngle = self.pulseTime * 30 * math.pi / 180
 
-    -- Animate energy rings
-    if self.energyRing then
-        self.energyRing.rotation = self.pulseTime * 30
-    end
-    if self.energyRing2 then
-        self.energyRing2.rotation = -self.pulseTime * 20
-        self.energyRing2.xScale = 1 + math.sin(self.pulseTime * 1.5) * 0.05
-        self.energyRing2.yScale = 1 + math.cos(self.pulseTime * 1.5) * 0.05
+    -- Muzzle flash timer
+    if self.muzzleFlashTimer > 0 then
+        self.muzzleFlashTimer = self.muzzleFlashTimer - dt
+        if self.muzzleFlashTimer < 0 then self.muzzleFlashTimer = 0 end
     end
 
-    -- Barrel direction
-    self:findTargetAndFire(enemies, projectiles)
+    -- Find target and fire
+    self:findTargetAndFire(enemies, projectiles, gameLoop)
+
+    -- Rebuild visuals
+    self:buildVisuals()
 end
 
-function Turret:findTargetAndFire(enemies, projectiles)
+function Turret:findTargetAndFire(enemies, projectiles, gameLoop)
     self.target = self:findTarget(enemies)
-    if self.target then
-        local dx = self.target.x - self.x
-        local dy = self.target.y - self.y
-        local angle = math.atan2(dy, dx) * 180 / math.pi
+    if not self.target then return end
 
-        -- Rotate barrel toward target
-        if self.barrel then
-            local barX = self.barrel.path and self.barrel.path and self.barrel.path.x1 or 0
-            self.barrel.rotation = angle
-            if self.barrelTip then self.barrelTip.rotation = angle end
-        end
+    local dx = self.target.x - self.x
+    local dy = self.target.y - self.y
+    self.barrelAngle = math.atan2(dy, dx)
 
-        -- Fire if ready
-        if self.cooldown <= 0 then
-            self:fire(projectiles)
-            self.cooldown = 1.0 / self.fireRate
-        end
+    -- Fire if ready
+    if self.cooldown <= 0 then
+        self:fire(projectiles)
+        self.cooldown = 1.0 / self.fireRate
     end
 end
 
@@ -365,46 +367,16 @@ end
 
 function Turret:fire(projectiles)
     if not self.target then return end
-    local proj = require("game.Projectile").new(self, self.target, self.damage, self.def.special)
+    local Projectile = require("game.Projectile")
+    local proj = Projectile.new(self, self.target, self.damage, self.def.special)
     table.insert(projectiles, proj)
 
-    -- Muzzle flash
-    self:spawnMuzzleFlash()
-end
-
-function Turret:spawnMuzzleFlash()
-    local cr, cg, cb = self.def.color[1], self.def.color[2], self.def.color[3]
-    local angle = (self.barrel and self.barrel.rotation or 0) * math.pi / 180
-    local barrelLen = self.def.radius * 1.5
-    local flashX = self.x + math.cos(angle) * barrelLen
-    local flashY = self.y + math.sin(angle) * barrelLen
-
-    -- Main flash
-    local flash = display.newCircle(self.group.parent, flashX, flashY, self.def.radius * 0.5)
-    flash:setFillColor(1, 1, 1, 0.9)
-    transition.to(flash, {
-        xScale = 3,
-        yScale = 3,
-        alpha = 0,
-        time = 150,
-        onComplete = function() flash:removeSelf() end
-    })
-
-    -- Color flash
-    local cflash = display.newCircle(self.group.parent, flashX, flashY, self.def.radius * 0.3)
-    cflash:setFillColor(cr, cg, cb)
-    transition.to(cflash, {
-        xScale = 4,
-        yScale = 4,
-        alpha = 0,
-        time = 200,
-        onComplete = function() cflash:removeSelf() end
-    end)
+    -- Muzzle flash flag (GameLoop handles visual)
+    self.muzzleFlashTimer = 0.15
 end
 
 function Turret:destroy()
-    self.group:removeSelf()
-    self.group = nil
+    self.canvas = nil
 end
 
 return Turret

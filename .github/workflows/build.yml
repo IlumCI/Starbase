@@ -5,28 +5,28 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      package:
-        description: 'Package name (e.g. com.zenfortress.game)'
-        required: false
-        default: 'com.zenfortress.game'
       app_name:
         description: 'App display name'
         required: false
         default: 'Zen Fortress'
+      package:
+        description: 'Package name (e.g. com.ilum.zenfortress)'
+        required: false
+        default: 'com.ilum.zenfortress'
       version:
         description: 'Version string'
         required: false
         default: '1.0.0'
 
 env:
-  PACKAGE: ${{ inputs.package || 'com.zenfortress.game' }}
   APP_NAME: ${{ inputs.app_name || 'Zen Fortress' }}
+  PACKAGE: ${{ inputs.package || 'com.ilum.zenfortress' }}
   VERSION: ${{ inputs.version || '1.0.0' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
 
     steps:
       - name: Checkout code
@@ -39,7 +39,6 @@ jobs:
           distribution: 'temurin'
 
       - name: Set up Android SDK
-        id: android-sdk
         uses: android-actions/setup-android@v3
 
       - name: Accept SDK licenses & install components
@@ -47,22 +46,15 @@ jobs:
           export ANDROID_HOME=/opt/android-sdk
           export ANDROID_SDK_ROOT=/opt/android-sdk
 
-          # Find the actual sdkmanager location
           SDKMANAGER=$(find $ANDROID_HOME -name sdkmanager -type f 2>/dev/null | head -1)
           if [ -z "$SDKMANAGER" ]; then
-            echo "sdkmanager not found in expected locations"
-            ls -la $ANDROID_HOME/cmdline-tools/ 2>/dev/null || echo "cmdline-tools dir doesn't exist"
+            echo "sdkmanager not found"
+            ls -la $ANDROID_HOME/cmdline-tools/ 2>/dev/null || echo "no cmdline-tools"
             exit 1
           fi
           echo "Found sdkmanager: $SDKMANAGER"
           yes | $SDKMANAGER --licenses 2>/dev/null || true
-          $SDKMANAGER \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
-        env:
-          ANDROID_HOME: /opt/android-sdk
-          ANDROID_SDK_ROOT: /opt/android-sdk
+          $SDKMANAGER "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Set environment variables
         run: |
@@ -70,350 +62,77 @@ jobs:
           echo "ANDROID_SDK_ROOT=/opt/android-sdk" >> $GITHUB_ENV
           echo "JAVA_HOME=${{ steps.setup-java.outputs.java-home }}" >> $GITHUB_ENV
 
-      - name: Download Android NDK
+      - name: Create love file
         run: |
-          wget -q "https://dl.google.com/android/repository/android-ndk-r25c-linux.zip" -O /tmp/ndk.zip
-          mkdir -p /opt/android-sdk/ndk
-          unzip -q /tmp/ndk.zip -d /opt/android-sdk/ndk/
-          echo "ANDROID_NDK_HOME=/opt/android-sdk/ndk/android-ndk-r25c" >> $GITHUB_ENV
+          cd src
+          # Create .love archive from all Lua files
+          zip -r ../game.love .
+          cd ..
+          echo "Created game.love ($(du -h game.love | cut -f1))"
 
-      - name: Create local.properties
+      - name: Download love-android-serviceman
         run: |
-          cat > zen-game/local.properties << EOF
-          sdk.dir=/opt/android-sdk
-          ndk.dir=/opt/android-sdk/ndk/android-ndk-r25c
-          EOF
+          wget -q "https://github.com/love2d-community/love-android-serviceman/releases/download/continuous/serviceman-$(uname -m)-linux.zip" -O /tmp/serviceman.zip
+          unzip -q /tmp/serviceman.zip -d /tmp/
+          chmod +x /tmp/serviceman
+          /tmp/serviceman --version || true
 
-      # ----------------------------------------------------------------
-      # STEP 1: Build native Solar2D libraries from source
-      # The free Solar2D package does NOT include CoronaBuilder.
-      # We build the native .so libraries from source and then use
-      # the community corona-builder tool to assemble the APK.
-      # ----------------------------------------------------------------
-
-      - name: Clone Solar2D engine source
+      - name: Build APK
         run: |
-          git clone --depth=1 --branch main \
-            https://github.com/solar2d/solar2d.git \
-            /tmp/solar2d-src
-          cd /tmp/solar2d-src
-          git submodule update --init --recursive
-
-      - name: Build native Solar2D libraries (arm64)
-        run: |
-          export ANDROID_NDK_HOME=/opt/android-sdk/ndk/android-ndk-r25c
+          export ANDROID_HOME=/opt/android-sdk
           export ANDROID_SDK_ROOT=/opt/android-sdk
-          export PATH=$ANDROID_NDK_HOME:$PATH
-
-          mkdir -p /tmp/solar2d-src/build-android
-          cd /tmp/solar2d-src/build-android
-
-          cmake .. \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
-            -DANDROID_NDK=$ANDROID_NDK_HOME \
-            -DANDROID_SDK=$ANDROID_SDK_ROOT \
-            -DANDROID_PLATFORM=android-21 \
-            -DANDROID_ABI=arm64-v8a \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DSOLAR2D_SKIP_SAMPLES=ON \
-            -DSOLAR2D_SKIP_DOCS=ON
-
-          make -j$(nproc) SOLAR2D 2>&1 | tail -20
-          ls -la lib/*.so 2>/dev/null || find . -name "*.so" | head -10
-
-      - name: Build native Solar2D libraries (armeabi-v7a)
-        run: |
-          export ANDROID_NDK_HOME=/opt/android-sdk/ndk/android-ndk-r25c
-          export ANDROID_SDK_ROOT=/opt/android-sdk
-
-          mkdir -p /tmp/solar2d-src/build-android-armv7
-          cd /tmp/solar2d-src/build-android-armv7
-
-          cmake .. \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
-            -DANDROID_NDK=$ANDROID_NDK_HOME \
-            -DANDROID_SDK=$ANDROID_SDK_ROOT \
-            -DANDROID_PLATFORM=android-21 \
-            -DANDROID_ABI=armeabi-v7a \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DSOLAR2D_SKIP_SAMPLES=ON \
-            -DSOLAR2D_SKIP_DOCS=ON
-
-          make -j$(nproc) SOLAR2D 2>&1 | tail -10
-
-      # ----------------------------------------------------------------
-      # STEP 2: Build native Solar2D libraries (x86_64) for emulator
-      # ----------------------------------------------------------------
-      - name: Build native Solar2D libraries (x86_64)
-        run: |
-          export ANDROID_NDK_HOME=/opt/android-sdk/ndk/android-ndk-r25c
-          export ANDROID_SDK_ROOT=/opt/android-sdk
-
-          mkdir -p /tmp/solar2d-src/build-android-x86
-          cd /tmp/solar2d-src/build-android-x86
-
-          cmake .. \
-            -DCMAKE_TOOLCHAIN_FILE=$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake \
-            -DANDROID_NDK=$ANDROID_NDK_HOME \
-            -DANDROID_SDK=$ANDROID_SDK_ROOT \
-            -DANDROID_PLATFORM=android-21 \
-            -DANDROID_ABI=x86_64 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DSOLAR2D_SKIP_SAMPLES=ON \
-            -DSOLAR2D_SKIP_DOCS=ON
-
-          make -j$(nproc) SOLAR2D 2>&1 | tail -10
-
-      - name: Collect built native libraries
-        run: |
-          mkdir -p /tmp/native-libs
-          find /tmp/solar2d-src/build-android* -name "*.so" -exec cp {} /tmp/native-libs/ \;
-          ls -la /tmp/native-libs/
-          echo "Native libs built: $(ls /tmp/native-libs/*.so 2>/dev/null | wc -l)"
-
-      # ----------------------------------------------------------------
-      # STEP 3: Use community CoronaBuilder to assemble the APK
-      # corona-builder is an open-source alternative to CoronaBuilder
-      # ----------------------------------------------------------------
-      - name: Clone and build corona-builder
-        run: |
-          git clone --depth=1 https://github.com/coronalabs/corona-builder.git /tmp/corona-builder 2>/dev/null || \
-          git clone --depth=1 https://github.com/coronalabs/corona-builder.git /tmp/corona-builder
-
-          cd /tmp/corona-builder
-          ls -la
-          cat README.md 2>/dev/null | head -30 || echo "No README"
-
-      - name: Build using CoronaBuilder if available
-        run: |
-          JAVA_HOME="${{ steps.setup-java.outputs.java-home }}"
+          export JAVA_HOME="${{ steps.setup-java.outputs.java-home }}"
           export PATH=$JAVA_HOME/bin:$PATH
-          export ANDROID_HOME=/opt/android-sdk
-          export ANDROID_SDK_ROOT=/opt/android-sdk
-          export ANDROID_NDK_ROOT=/opt/android-sdk/ndk/android-ndk-r25c
 
-          mkdir -p /tmp/zenfortress-output
+          mkdir -p output
 
-          cd /tmp/corona-builder
+          /tmp/serviceman \
+            --app-name "$APP_NAME" \
+            --package "$PACKAGE" \
+            --version "$VERSION" \
+            --input game.love \
+            --output-dir output/ \
+            --keystore-release-alias "$KEY_ALIAS" \
+            --keystore-release-key-pass "$KEY_PASS" \
+            --keystore-release-pass "$KEYSTORE_PASS" || true
 
-          # Check if CoronaBuilder has a build tool
-          ls -la bin/ 2>/dev/null
-          ls -la *.jar 2>/dev/null
-
-          if ls *.jar 2>/dev/null | grep -qi corona; then
-            CORONA_JAR=$(ls *.jar | grep -i corona | head -1)
-            echo "Found: $CORONA_JAR"
-            java -Xmx4g -jar "$CORONA_JAR" \
-              --platform android \
-              --input "$GITHUB_WORKSPACE/zen-game" \
-              --output "$GITHUB_WORKSPACE/output" \
-              --sdk-root "$ANDROID_HOME" \
-              --ndk-root "$ANDROID_NDK_ROOT" \
-              --sdk-platform android-34 \
-              --app-title "${{ env.APP_NAME }}" \
-              --package-name "${{ env.PACKAGE }}" \
-              --version-code 1 \
-              --version-name "${{ env.VERSION }}" \
-              --android-app-bundle false
-          else
-            echo "No Corona JAR found in corona-builder"
-            ls -la
+          # If serviceman fails (no keystore), try basic build
+          if ! ls output/*.apk 2>/dev/null; then
+            /tmp/serviceman \
+              --app-name "$APP_NAME" \
+              --package "$PACKAGE" \
+              --version "$VERSION" \
+              --input game.love \
+              --output-dir output/
           fi
 
-      # ----------------------------------------------------------------
-      # STEP 4: Assemble APK manually if CoronaBuilder unavailable
-      # (fallback using Android Gradle approach)
-      # ----------------------------------------------------------------
-      - name: Create Android project structure
-        run: |
-          if [ -f "$GITHUB_WORKSPACE/output"/*.apk ] 2>/dev/null; then
-            echo "APK already built by CoronaBuilder"
-            ls -la "$GITHUB_WORKSPACE/output"/*.apk
-          else
-            echo "CoronaBuilder unavailable — creating manual APK build"
-            mkdir -p "$GITHUB_WORKSPACE/build"
-          fi
-
-      - name: Build APK with Gradle (manual assembly fallback)
-        run: |
-          if ls "$GITHUB_WORKSPACE/output"/*.apk 2>/dev/null; then
-            echo "Skipping Gradle — APK exists"
-            exit 0
-          fi
-
-          export ANDROID_HOME=/opt/android-sdk
-          export ANDROID_SDK_ROOT=/opt/android-sdk
-          export ANDROID_NDK_ROOT=/opt/android-sdk/ndk/android-ndk-r25c
-          export JAVA_HOME="${{ steps.setup-java.outputs.java-home }}"
-
-          # Create minimal Android project for the Lua game
-          cat > "$GITHUB_WORKSPACE/build/settings.gradle" << 'GRADLE'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          rootProject.name = "ZenFortress"
-          GRADLE
-
-          cat > "$GITHUB_WORKSPACE/build/build.gradle" << 'GRADLE'
-          plugins {
-              id 'com.android.application' version '8.2.0'
-          }
-          GRADLE
-
-          cat > "$GITHUB_WORKSPACE/build/gradle.properties" << 'GRADLE'
-          android.useAndroidX=true
-          android.enableJetifier=true
-          GRADLE
-
-          mkdir -p "$GITHUB_WORKSPACE/build/app/src/main/java/com/zenfortress/game"
-          mkdir -p "$GITHUB_WORKSPACE/build/app/src/main/libs"
-          mkdir -p "$GITHUB_WORKSPACE/build/app/src/main/assets"
-          mkdir -p "$GITHUB_WORKSPACE/build/app/src/main/res/values"
-          mkdir -p "$GITHUB_WORKSPACE/build/app/src/main/res/drawable"
-
-          # Copy native libs
-          cp -r /tmp/native-libs/*.so "$GITHUB_WORKSPACE/build/app/src/main/libs/" 2>/dev/null || true
-
-          # Copy game assets (flatten Lua files into assets)
-          find "$GITHUB_WORKSPACE/zen-game/src" -name "*.lua" | while read f; do
-            rel="${f#$GITHUB_WORKSPACE/zen-game/}"
-            dir=$(dirname "$GITHUB_WORKSPACE/build/app/src/main/assets/$rel")
-            mkdir -p "$dir"
-            cp "$f" "$dir"
-          done
-
-          cat > "$GITHUB_WORKSPACE/build/app/build.gradle" << 'GRADLE'
-          plugins {
-              id 'com.android.application'
-          }
-
-          android {
-              namespace 'com.zenfortress.game'
-              compileSdk 34
-
-              defaultConfig {
-                  applicationId project.findRoot().hasProperty('APPLICATION_ID') \
-                      ? project.findRoot().APPLICATION_ID : 'com.zenfortress.game'
-                  minSdk 21
-                  targetSdk 34
-                  versionCode 1
-                  versionName "1.0.0"
-              }
-
-              buildTypes {
-                  release {
-                      minifyEnabled false
-                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
-                  }
-                  debug {
-                      minifyEnabled false
-                  }
-              }
-
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-
-              packagingOptions {
-                  jniLibs {
-                      useLegacyPackaging false
-                  }
-              }
-          }
-
-          dependencies {
-              implementation 'androidx.appcompat:appcompat:1.6.1'
-          }
-          GRADLE
-
-          cat > "$GITHUB_WORKSPACE/build/app/src/main/AndroidManifest.xml" << 'XML'
-          <?xml version="1.0" encoding="utf-8"?>
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.zenfortress.game">
-              <uses-permission android:name="android.permission.INTERNET"/>
-              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
-              <application
-                  android:allowBackup="true"
-                  android:label="Zen Fortress"
-                  android:icon="@mipmap/ic_launcher"
-                  android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
-                  <activity
-                      android:name="com.solar2d.plugin.CoronaActivity"
-                      android:configChanges="orientation|screenSize|keyboardHidden"
-                      android:screenOrientation="portrait"
-                      android:exported="true">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          XML
-
-          # Minimal launcher icon
-          mkdir -p "$GITHUB_WORKSPACE/build/app/src/main/res/mipmap-hdpi"
-          printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82' > "$GITHUB_WORKSPACE/build/app/src/main/res/mipmap-hdpi/ic_launcher.png"
-
-          cat > "$GITHUB_WORKSPACE/build/app/proguard-rules.pro" << 'PRO'
-          -keepclassmembers class * {
-              native <methods>;
-          }
-          PRO
-
-          echo "=== Gradle project structure ==="
-          find "$GITHUB_WORKSPACE/build" -type f | head -20
-
-      - name: Build debug APK with Gradle
-        run: |
-          if ls "$GITHUB_WORKSPACE/output"/*.apk 2>/dev/null; then
-            echo "APK already built"
-            exit 0
-          fi
-
-          export ANDROID_HOME=/opt/android-sdk
-          export ANDROID_SDK_ROOT=/opt/android-sdk
-          export ANDROID_NDK_ROOT=/opt/android-sdk/ndk/android-ndk-r25c
-          export JAVA_HOME="${{ steps.setup-java.outputs.java-home }}"
-          export PATH=$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH
-
-          cd "$GITHUB_WORKSPACE/build"
-          chmod +x gradlew 2>/dev/null || true
-          ./gradlew assembleDebug --no-daemon 2>&1 | tail -30
+          echo "=== APK files ==="
+          find output/ -name "*.apk" -exec ls -lh {} \;
 
       - name: Find built APK
         run: |
-          echo "=== Checking for APKs ==="
-          find "$GITHUB_WORKSPACE" -name "*.apk" 2>/dev/null
-          ls -la "$GITHUB_WORKSPACE/output"/*.apk 2>/dev/null || echo "No output APKs"
-          ls -la "$GITHUB_WORKSPACE/build/app/build/outputs/apk/debug"/*.apk 2>/dev/null || echo "No Gradle APKs"
+          APK=$(find output/ -name "*.apk" 2>/dev/null | head -1)
+          if [ -n "$APK" ]; then
+            echo "APK=$APK" >> $GITHUB_ENV
+            echo "APK found: $APK ($(du -h $APK | cut -f1))"
+          else
+            echo "No APK found in output/"
+            find output/ -type f | head -20
+          fi
 
       - name: Upload APK artifact
-        id: upload
+        if: env.APK != ''
         uses: actions/upload-artifact@v4
         with:
-          name: ZenFortress-${{ github.run_number }}
-          path: |
-            ${{ github.workspace }}/output/*.apk
-            ${{ github.workspace }}/build/app/build/outputs/apk/debug/*.apk
-          if-no-files-found: ignore
+          name: ${{ env.APP_NAME }}-${{ github.run_number }}
+          path: ${{ env.APK }}
           retention-days: 14
 
       - name: Summary
         run: |
-          APK=$(find "$GITHUB_WORKSPACE" -name "*.apk" 2>/dev/null | head -1)
-          if [ -n "$APK" ]; then
-            echo "✓ APK built: $APK"
-            ls -lh "$APK"
+          if [ -n "${{ env.APK }}" ]; then
+            echo "Build succeeded"
+            ls -lh "${{ env.APK }}"
           else
-            echo "✗ Build failed — check logs above"
-            echo "Known issue: Solar2D free version has no headless build tool."
-            echo "Solutions:"
-            echo "  1. Use Solar2D GUI Simulator on Windows/Mac"
-            echo "  2. Switch to Godot (full CLI headless build)"
+            echo "Build failed — check logs above"
           fi

@@ -1,4 +1,4 @@
--- Projectile: visual-enhanced projectiles with trails
+-- Projectile: visual-enhanced projectiles with trails (LÖVE2D canvas-based)
 local C = require("consts")
 
 local Projectile = {}
@@ -6,26 +6,39 @@ Projectile.__index = Projectile
 
 function Projectile.new(turret, target, damage, special)
     local self = setmetatable({}, Projectile)
+    self.turretDef = turret.def
+    self.damage = damage
+    self.special = special
+
+    -- Start position from turret
+    self.startX = turret.x
+    self.startY = turret.y
     self.x = turret.x
     self.y = turret.y
+
+    -- Target (live reference for tracking)
     self.target = target
     self.targetX = target.x
     self.targetY = target.y
-    self.damage = damage
-    self.special = special
-    self.turretDef = turret.def
+
     self.speed = C.PROJECTILE_SPEED
     self.dead = false
+
+    -- Track which enemies were already hit (for pierce)
     self.hitTargets = {}
-    self.startX = self.x
-    self.startY = self.y
+
+    -- Trail of past positions
     self.trail = {}
     self.maxTrail = 8
 
-    -- Display
-    self.group = display.newGroup()
-    self.group.x = self.x
-    self.group.y = self.y
+    -- Rotation angle (pointing toward target)
+    self.rotation = 0
+
+    -- Animation state
+    self.ringAngle = math.random() * math.pi * 2
+
+    -- Canvas
+    self.canvas = love.graphics.newCanvas(C.WIDTH, C.HEIGHT)
     self:buildVisuals()
 
     return self
@@ -35,73 +48,113 @@ function Projectile:buildVisuals()
     local c = self.turretDef.color
     local cr, cg, cb = c[1], c[2], c[3]
 
-    if self.special == "splash" then
-        -- Cannon: larger, glowing orb
-        self.main = display.newCircle(self.group, 0, 0, 10)
-        self.main:setFillColor(cr, cg, cb, 0.9)
-        self.main:setStrokeColor(1, 1, 1, 0.3)
-        self.main.strokeWidth = 1
+    self.canvas:renderTo(function()
+        love.graphics.clear()
+        love.graphics.setBlendMode("alpha")
 
-        -- Inner glow
-        local inner = display.newCircle(self.group, 0, 0, 5)
-        inner:setFillColor(1, 1, 1, 0.5)
+        -- Render centered on canvas
+        love.graphics.push()
+        love.graphics.translate(C.WIDTH / 2, C.HEIGHT / 2)
 
-        -- Outer glow
-        local outer = display.newCircle(self.group, 0, 0, 14)
-        outer:setFillColor(cr, cg, cb, 0.15)
-
-        -- Rotating ring
-        self.ring = display.newCircle(self.group, 0, 0, 16)
-        self.ring:setStrokeColor(cr, cg, cb, 0.4)
-        self.ring.strokeWidth = 1.5
-        self.ring:setFillColor(0, 0, 0, 0)
-        self.ring.rotation = math.random() * 360
-
-    elseif self.special == "pierce" then
-        -- Sniper: long needle
-        self.main = display.newLine(self.group, -16, 0, 16, 0)
-        self.main:setStrokeColor(cr, cg, cb, 1)
-        self.main.strokeWidth = 4
-        local tip = display.newLine(self.group, 12, 0, 20, 0)
-        tip:setStrokeColor(1, 1, 1, 0.8)
-        tip.strokeWidth = 2
-        local trail = display.newLine(self.group, -16, 0, -28, 0)
-        trail:setStrokeColor(cr, cg, cb, 0.4)
-        trail.strokeWidth = 2
-
-    elseif self.special == "chain" then
-        -- Zapper: electric ball
-        self.main = display.newCircle(self.group, 0, 0, 6)
-        self.main:setFillColor(cr, cg, cb, 1)
-        -- Lightning bolts around it
-        for i = 1, 4 do
-            local angle = (i / 4) * math.pi * 2
-            local bolt = display.newLine(self.group,
-                math.cos(angle) * 6, math.sin(angle) * 6,
-                math.cos(angle) * 12, math.sin(angle) * 12)
-            bolt:setStrokeColor(cr, cg, cb, 0.6)
-            bolt.strokeWidth = 1.5
+        -- Draw trail (fading circles behind projectile)
+        for i, pt in ipairs(self.trail) do
+            if i > 1 then
+                local alpha = (1 - (i / self.maxTrail)) * 0.4
+                local radius = math.max(1, 5 - i * 0.6)
+                love.graphics.setColor(cr, cg, cb, alpha)
+                love.graphics.circle("fill", pt.x - self.x, pt.y - self.y, radius)
+            end
         end
-        local inner = display.newCircle(self.group, 0, 0, 3)
-        inner:setFillColor(1, 1, 1, 0.7)
 
-    else
-        -- Blaster: small glowing orb with trail
-        self.main = display.newCircle(self.group, 0, 0, 5)
-        self.main:setFillColor(cr, cg, cb, 1)
-        local inner = display.newCircle(self.group, 0, 0, 2.5)
-        inner:setFillColor(1, 1, 1, 0.8)
-        local glow = display.newCircle(self.group, 0, 0, 8)
-        glow:setFillColor(cr, cg, cb, 0.2)
-    end
+        -- Rotate toward target
+        love.graphics.rotate(self.rotation)
 
-    -- Trail group
-    self.trailGroup = display.newGroup()
-    self.group:insert(self.trailGroup)
-    self.trailObjects = {}
+        -- Type-specific visuals
+        if self.special == "splash" then
+            self:renderSplash(cr, cg, cb)
+        elseif self.special == "pierce" then
+            self:renderPierce(cr, cg, cb)
+        elseif self.special == "chain" then
+            self:renderChain(cr, cg, cb)
+        else
+            self:renderNone(cr, cg, cb)
+        end
+
+        love.graphics.pop()
+    end)
 end
 
-function Projectile:update(dt, enemies, onHit)
+function Projectile:renderNone(cr, cg, cb)
+    -- Outer glow
+    love.graphics.setColor(cr, cg, cb, 0.2)
+    love.graphics.circle("fill", 0, 0, 8)
+    -- Main orb
+    love.graphics.setColor(cr, cg, cb)
+    love.graphics.circle("fill", 0, 0, 5)
+    -- Inner core
+    love.graphics.setColor(1, 1, 1, 0.8)
+    love.graphics.circle("fill", 0, 0, 2.5)
+end
+
+function Projectile:renderSplash(cr, cg, cb)
+    -- Outer glow
+    love.graphics.setColor(cr, cg, cb, 0.15)
+    love.graphics.circle("fill", 0, 0, 14)
+    -- Main orb
+    love.graphics.setColor(cr, cg, cb, 0.9)
+    love.graphics.circle("fill", 0, 0, 10)
+    -- Stroke
+    love.graphics.setColor(1, 1, 1, 0.3)
+    love.graphics.setLineWidth(1)
+    love.graphics.circle("line", 0, 0, 10)
+    -- Inner glow
+    love.graphics.setColor(1, 1, 1, 0.5)
+    love.graphics.circle("fill", 0, 0, 5)
+    -- Rotating ring (rendered rotating in update)
+    love.graphics.setColor(cr, cg, cb, 0.4)
+    love.graphics.setLineWidth(1.5)
+    love.graphics.push()
+    love.graphics.rotate(self.ringAngle)
+    love.graphics.circle("line", 0, 0, 16)
+    love.graphics.pop()
+end
+
+function Projectile:renderPierce(cr, cg, cb)
+    love.graphics.setColor(cr, cg, cb)
+    love.graphics.setLineWidth(4)
+    love.graphics.line(-16, 0, 16, 0)
+    -- Tip (white)
+    love.graphics.setColor(1, 1, 1, 0.8)
+    love.graphics.setLineWidth(2)
+    love.graphics.line(12, 0, 20, 0)
+    -- Trail
+    love.graphics.setColor(cr, cg, cb, 0.4)
+    love.graphics.setLineWidth(2)
+    love.graphics.line(-16, 0, -28, 0)
+end
+
+function Projectile:renderChain(cr, cg, cb)
+    -- Electric ball
+    love.graphics.setColor(cr, cg, cb)
+    love.graphics.circle("fill", 0, 0, 6)
+    -- Inner core
+    love.graphics.setColor(1, 1, 1, 0.7)
+    love.graphics.circle("fill", 0, 0, 3)
+
+    -- Lightning bolts (4 directions, offset by ring angle)
+    love.graphics.setColor(cr, cg, cb, 0.6)
+    love.graphics.setLineWidth(1.5)
+    for i = 1, 4 do
+        local angle = (i / 4) * math.pi * 2 + self.ringAngle
+        local bx = math.cos(angle) * 6
+        local by = math.sin(angle) * 6
+        local ex = math.cos(angle) * 12
+        local ey = math.sin(angle) * 12
+        love.graphics.line(bx, by, ex, ey)
+    end
+end
+
+function Projectile:update(dt, enemies, gameLoop)
     if self.dead then return end
 
     -- Record trail point
@@ -110,7 +163,7 @@ function Projectile:update(dt, enemies, onHit)
         table.remove(self.trail)
     end
 
-    -- Update target position
+    -- Update target position (track live target)
     if self.target and not self.target.dead and not self.target.reachedEnd then
         self.targetX = self.target.x
         self.targetY = self.target.y
@@ -121,65 +174,33 @@ function Projectile:update(dt, enemies, onHit)
     local dist = math.sqrt(dx * dx + dy * dy)
     local moveDist = self.speed * dt
 
-    -- Rotate ring on splash projectiles
-    if self.ring then
-        self.ring.rotation = self.ring.rotation + dt * 200
-    end
+    -- Rotate projectile toward target
+    self.rotation = math.atan2(dy, dx)
+
+    -- Rotate ring for splash/chain
+    self.ringAngle = self.ringAngle + dt * 200 * math.pi / 180
 
     if dist <= moveDist then
+        -- Reached target
         self.x = self.targetX
         self.y = self.targetY
-        self.group.x = self.x
-        self.group.y = self.y
         self.dead = true
-        if onHit then onHit(self) end
+
+        if gameLoop then
+            gameLoop:onProjectileHit(self)
+        end
     else
+        -- Move toward target
         self.x = self.x + (dx / dist) * moveDist
         self.y = self.y + (dy / dist) * moveDist
-        self.group.x = self.x
-        self.group.y = self.y
-
-        -- Rotate projectile toward target
-        local angle = math.atan2(dy, dx) * 180 / math.pi
-        if self.main then
-            -- For lines, rotate
-            if self.main.path then
-                self.main.rotation = angle
-            end
-        end
     end
 
-    -- Update trail visuals
-    self:updateTrail()
-end
-
-function Projectile:updateTrail()
-    if not self.trailGroup then return end
-    -- Clear old trail
-    for _, t in ipairs(self.trailObjects) do
-        t:removeSelf()
-    end
-    self.trailObjects = {}
-
-    local c = self.turretDef.color
-    local cr, cg, cb = c[1], c[2], c[3]
-
-    for i, pt in ipairs(self.trail) do
-        if i > 1 then
-            local alpha = 1 - (i / self.maxTrail)
-            local radius = math.max(1, 5 - i * 0.6)
-            local dot = display.newCircle(self.trailGroup,
-                pt.x - self.x,
-                pt.y - self.y,
-                radius)
-            dot:setFillColor(cr, cg, cb, alpha * 0.4)
-        end
-    end
+    -- Rebuild visuals
+    self:buildVisuals()
 end
 
 function Projectile:destroy()
-    self.group:removeSelf()
-    self.group = nil
+    self.canvas = nil
 end
 
 return Projectile

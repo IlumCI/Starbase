@@ -1,4 +1,4 @@
--- HUD: in-game heads-up display
+-- HUD: in-game heads-up display (LÖVE2D version)
 local C = require("consts")
 local PS = require("game.meta.PlayerState")
 
@@ -8,164 +8,148 @@ HUD.__index = HUD
 function HUD.new(gameLoop)
     local self = setmetatable({}, HUD)
     self.gameLoop = gameLoop
-    self.group = display.newGroup()
-    self.group.isHitTestable = false
+    self.canvas = love.graphics.newCanvas(C.WIDTH, C.HEIGHT)
+    self.visible = false
+    self.waveNumber = 1
 
-    -- Wave counter
-    self.waveText = display.newText({
-        parent = self.group,
-        text = "WAVE 1",
-        x = 30,
-        y = 30,
-        font = native.systemFontBold,
-        fontSize = 28,
-        align = "left",
-    })
-    self.waveText:setFillColor(unpack(C.COLOR.UI_TEXT))
-    self.waveText.anchorX = 0
-    self.waveText.anchorY = 0
+    -- Pause button hitbox (set after canvas creation)
+    self.pauseBtn = { x = 30, y = C.HEIGHT - 62, w = 80, h = 44 }
 
-    -- Gold
-    self.goldText = display.newText({
-        parent = self.group,
-        text = "0",
-        x = 30,
-        y = 65,
-        font = native.systemFontBold,
-        fontSize = 24,
-        align = "left",
-    })
-    self.goldText:setFillColor(unpack(C.COLOR.GOLD))
-    self.goldText.anchorX = 0
-    self.goldText.anchorY = 0
-
-    -- Gold icon (small circle)
-    self.goldIcon = display.newCircle(self.group, 18, 74, 8)
-    self.goldIcon:setFillColor(unpack(C.COLOR.GOLD))
-
-    -- HP bar background
-    self.hpBarBg = display.newRect(self.group, C.WIDTH - 160, 30, 140, 20)
-    self.hpBarBg:setFillColor(unpack(C.COLOR.HP_BAR_BG))
-    self.hpBarBg.anchorX = 0
-
-    -- HP bar fill
-    self.hpBar = display.newRect(self.group, C.WIDTH - 160, 30, 140, 20)
-    self.hpBar:setFillColor(unpack(C.COLOR.HP_BAR))
-    self.hpBar.anchorX = 0
-
-    -- HP label
-    self.hpText = display.newText({
-        parent = self.group,
-        text = "HP",
-        x = C.WIDTH - 170,
-        y = 31,
-        font = native.systemFont,
-        fontSize = 14,
-        align = "right",
-    })
-    self.hpText:setFillColor(1, 1, 1)
-    self.hpText.anchorX = 1
-    self.hpText.anchorY = 0
-
-    -- XP bar background
-    self.xpBarBg = display.newRect(self.group, C.WIDTH - 160, 60, 140, 12)
-    self.xpBarBg:setFillColor(unpack(C.COLOR.XP_BAR_BG))
-    self.xpBarBg.anchorX = 0
-
-    -- XP bar fill
-    self.xpBar = display.newRect(self.group, C.WIDTH - 160, 60, 0, 12)
-    self.xpBar:setFillColor(unpack(C.COLOR.XP_BAR))
-    self.xpBar.anchorX = 0
-
-    -- Player level badge
-    self.levelText = display.newText({
-        parent = self.group,
-        text = "LV.1",
-        x = C.WIDTH - 30,
-        y = C.HEIGHT - 40,
-        font = native.systemFontBold,
-        fontSize = 20,
-        align = "right",
-    })
-    self.levelText:setFillColor(unpack(C.COLOR.ACCENT))
-    self.levelText.anchorX = 1
-    self.levelText.anchorY = 1
-
-    -- Pause button
-    self.pauseBtn = display.newRect(self.group, 30, C.HEIGHT - 40, 80, 44)
-    self.pauseBtn:setFillColor(0.2, 0.2, 0.3)
-    self.pauseBtn:setStrokeColor(0.4, 0.4, 0.5)
-    self.pauseBtn.strokeWidth = 1
-    self.pauseBtn.isHitTestable = true
-    self.pauseBtn:addEventListener("tap", function()
-        self.gameLoop:onPauseTap()
-    end)
-
-    self.pauseLabel = display.newText({
-        parent = self.group,
-        text = "PAUSE",
-        x = 30,
-        y = C.HEIGHT - 40,
-        font = native.systemFontBold,
-        fontSize = 16,
-        align = "center",
-    })
-    self.pauseLabel:setFillColor(1, 1, 1)
-
-    -- Wave transition text
-    self.transitionText = display.newText({
-        parent = self.group,
-        text = "",
-        x = C.CENTER_X,
-        y = C.CENTER_Y - 100,
-        font = native.systemFontBold,
-        fontSize = 36,
-        align = "center",
-    })
-    self.transitionText:setFillColor(1, 1, 1)
-    self.transitionText.isVisible = false
-
+    self:buildCanvas()
     return self
 end
 
+function HUD:buildCanvas()
+    self.canvas:renderTo(function()
+        -- Wave text
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.print("WAVE 1", 30, 20)
+
+        -- Gold icon (small circle)
+        love.graphics.setColor(unpack(C.COLOR.GOLD))
+        love.graphics.circle("fill", 18, 60, 8)
+
+        -- Gold text
+        love.graphics.setColor(unpack(C.COLOR.GOLD))
+        love.graphics.print("0", 30, 50)
+
+        -- HP bar background
+        love.graphics.setColor(unpack(C.COLOR.HP_BAR_BG))
+        love.graphics.rectangle("fill", C.WIDTH - 160, 20, 140, 20)
+
+        -- HP bar fill (0 width initially)
+        love.graphics.setColor(unpack(C.COLOR.HP_BAR))
+        love.graphics.rectangle("fill", C.WIDTH - 160, 20, 140, 20)
+
+        -- HP label
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.print("HP", C.WIDTH - 170, 21)
+
+        -- XP bar background
+        love.graphics.setColor(unpack(C.COLOR.XP_BAR_BG))
+        love.graphics.rectangle("fill", C.WIDTH - 160, 50, 140, 12)
+
+        -- XP bar fill (0 width initially)
+        love.graphics.setColor(unpack(C.COLOR.XP_BAR))
+        love.graphics.rectangle("fill", C.WIDTH - 160, 50, 0, 12)
+
+        -- Player level badge
+        love.graphics.setColor(unpack(C.COLOR.ACCENT))
+        love.graphics.print("LV.1", C.WIDTH - 60, C.HEIGHT - 60)
+
+        -- Pause button background
+        love.graphics.setColor(0.2, 0.2, 0.3, 1)
+        love.graphics.rectangle("fill", self.pauseBtn.x, self.pauseBtn.y, self.pauseBtn.w, self.pauseBtn.h)
+
+        -- Pause button stroke
+        love.graphics.setColor(0.4, 0.4, 0.5, 1)
+        love.graphics.rectangle("line", self.pauseBtn.x, self.pauseBtn.y, self.pauseBtn.w, self.pauseBtn.h)
+
+        -- Pause button label
+        love.graphics.setColor(1, 1, 1, 1)
+        local px, py = self.pauseBtn.x, self.pauseBtn.y
+        love.graphics.print("PAUSE", px + 6, py + 13)
+
+        -- Wave transition text (placeholder, drawn elsewhere)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.print("", C.CENTER_X, C.CENTER_Y - 100)
+    end)
+end
+
 function HUD:update(waveNumber)
-    self.waveText.text = "WAVE " .. waveNumber
-    self.goldText.text = tostring(PS.run.gold)
+    self.waveNumber = waveNumber
 
-    -- HP bar
-    local maxHP = C.BASE_HP
-    local hpRatio = math.max(0, PS.run.hp / maxHP)
-    self.hpBar.width = 140 * hpRatio
+    self.canvas:renderTo(function()
+        -- Wave text
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.print("WAVE " .. waveNumber, 30, 20)
 
-    -- XP bar
-    local xpNeeded = PS:xpToNextLevel()
-    local xpRatio = math.min(1, PS.run.xp / xpNeeded)
-    self.xpBar.width = 140 * xpRatio
+        -- Gold text
+        love.graphics.setColor(unpack(C.COLOR.GOLD))
+        love.graphics.circle("fill", 18, 60, 8)
+        love.graphics.print(tostring(PS.run.gold), 30, 50)
 
-    -- Level
-    self.levelText.text = "LV." .. PS.data.playerLevel
+        -- HP bar
+        local maxHP = C.BASE_HP
+        local hpRatio = math.max(0, PS.run.hp / maxHP)
+        love.graphics.setColor(unpack(C.COLOR.HP_BAR_BG))
+        love.graphics.rectangle("fill", C.WIDTH - 160, 20, 140, 20)
+        love.graphics.setColor(unpack(C.COLOR.HP_BAR))
+        love.graphics.rectangle("fill", C.WIDTH - 160, 20, 140 * hpRatio, 20)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.print("HP", C.WIDTH - 170, 21)
 
-    -- Wave transition countdown
-    local wm = self.gameLoop.waveManager
-    if wm:isInTransition() then
-        local t = math.ceil(wm:getTransitionTime())
-        self.transitionText.text = "NEXT WAVE IN " .. t
-        self.transitionText.isVisible = true
-    else
-        self.transitionText.isVisible = false
-    end
+        -- XP bar
+        local xpNeeded = PS:xpToNextLevel()
+        local xpRatio = math.min(1, PS.run.xp / xpNeeded)
+        love.graphics.setColor(unpack(C.COLOR.XP_BAR_BG))
+        love.graphics.rectangle("fill", C.WIDTH - 160, 50, 140, 12)
+        love.graphics.setColor(unpack(C.COLOR.XP_BAR))
+        love.graphics.rectangle("fill", C.WIDTH - 160, 50, 140 * xpRatio, 12)
+
+        -- Player level
+        love.graphics.setColor(unpack(C.COLOR.ACCENT))
+        love.graphics.print("LV." .. PS.data.playerLevel, C.WIDTH - 60, C.HEIGHT - 60)
+
+        -- Pause button
+        love.graphics.setColor(0.2, 0.2, 0.3, 1)
+        love.graphics.rectangle("fill", self.pauseBtn.x, self.pauseBtn.y, self.pauseBtn.w, self.pauseBtn.h)
+        love.graphics.setColor(0.4, 0.4, 0.5, 1)
+        love.graphics.rectangle("line", self.pauseBtn.x, self.pauseBtn.y, self.pauseBtn.w, self.pauseBtn.h)
+        love.graphics.setColor(1, 1, 1, 1)
+        love.graphics.print("PAUSE", self.pauseBtn.x + 6, self.pauseBtn.y + 13)
+
+        -- Wave transition countdown
+        local wm = self.gameLoop.waveManager
+        if wm and wm:isInTransition() then
+            local t = math.ceil(wm:getTransitionTime())
+            love.graphics.setColor(1, 1, 1, 1)
+            love.graphics.print("NEXT WAVE IN " .. t, C.CENTER_X - 80, C.CENTER_Y - 120)
+        end
+    end)
 end
 
 function HUD:show()
-    self.group.isVisible = true
+    self.visible = true
 end
 
 function HUD:hide()
-    self.group.isVisible = false
+    self.visible = false
 end
 
 function HUD:destroy()
-    self.group:removeSelf()
+    self.canvas = nil
+end
+
+function HUD:onMousePressed(x, y, button)
+    if not self.visible then return false end
+    if button ~= 1 then return false end
+    local btn = self.pauseBtn
+    if x >= btn.x and x <= btn.x + btn.w and y >= btn.y and y <= btn.y + btn.h then
+        self.gameLoop:onPauseTap()
+        return true
+    end
+    return false
 end
 
 return HUD

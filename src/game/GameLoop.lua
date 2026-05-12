@@ -1,4 +1,4 @@
--- GameLoop: core game state machine
+-- GameLoop: core game state machine (LÖVE2D port)
 local C = require("consts")
 local PS = require("game.meta.PlayerState")
 local Path = require("game.Path")
@@ -18,19 +18,9 @@ function GameLoop.new()
     self.projectiles = {}
     self.waveManager = WM.new(self)
 
-    -- Groups for display
-    self.bgGroup = display.newGroup()
-    self.pathGroup = display.newGroup()
-    self.enemyGroup = display.newGroup()
-    self.turretGroup = display.newGroup()
-    self.projGroup = display.newGroup()
-    self.uiGroup = display.newGroup()
-
-    -- Build background
+    -- Background canvas
+    self.bgCanvas = love.graphics.newCanvas(C.WIDTH, C.HEIGHT)
     self:buildBackground()
-
-    -- Build path visual
-    self:buildPathVisual()
 
     -- Current upgrade choices
     self.upgradeChoices = {}
@@ -39,48 +29,67 @@ function GameLoop.new()
     self.transitionCountdown = 0
     self.waveStartGold = 0
 
+    -- Pulse time for visual effects
+    self.pulseTime = 0
+
+    -- Death effect pool (transient circles rendered in draw)
+    self.deathEffects = {}  -- { {x, y, r, cr, cg, cb, timer}, ... }
+    self.muzzleFlashes = {}  -- { {x, y, r, cr, cg, cb, timer}, ... }
+
+    -- UI visibility
+    self.showingMenu = false
+    self.showingUpgrade = false
+    self.showingPause = false
+
+    -- UI refs (set by main.lua)
+    self.mainMenu = nil
+    self.hud = nil
+    self.upgradeScreen = nil
+    self.pauseMenu = nil
+
     return self
 end
 
 function GameLoop:buildBackground()
-    -- Solid background
-    local bg = display.newRect(self.bgGroup, C.CENTER_X, C.CENTER_Y, C.WIDTH, C.HEIGHT)
-    bg:setFillColor(unpack(C.COLOR.BACKGROUND))
+    self.bgCanvas:renderTo(function()
+        -- Solid background
+        love.graphics.setColor(C.COLOR.BACKGROUND[1], C.COLOR.BACKGROUND[2], C.COLOR.BACKGROUND[3])
+        love.graphics.rectangle("fill", 0, 0, C.WIDTH, C.HEIGHT)
 
-    -- Grid lines
-    local gridSpacing = 80
-    for x = 0, C.WIDTH, gridSpacing do
-        local line = display.newLine(self.bgGroup, x, 0, x, C.HEIGHT)
-        line:setStrokeColor(unpack(C.COLOR.GRID))
-        line.strokeWidth = 1
-    end
-    for y = 0, C.HEIGHT, gridSpacing do
-        local line = display.newLine(self.bgGroup, 0, y, C.WIDTH, y)
-        line:setStrokeColor(unpack(C.COLOR.GRID))
-        line.strokeWidth = 1
-    end
-end
+        -- Grid lines
+        local gridSpacing = 80
+        love.graphics.setColor(C.COLOR.GRID[1], C.COLOR.GRID[2], C.COLOR.GRID[3])
+        for x = 0, C.WIDTH, gridSpacing do
+            love.graphics.setLineWidth(1)
+            love.graphics.line(x, 0, x, C.HEIGHT)
+        end
+        for y = 0, C.HEIGHT, gridSpacing do
+            love.graphics.line(0, y, C.WIDTH, y)
+        end
 
-function GameLoop:buildPathVisual()
-    local waypoints = Path.getWaypoints()
-    for i = 1, #waypoints - 1 do
-        local line = display.newLine(self.pathGroup,
-            waypoints[i].x, waypoints[i].y,
-            waypoints[i + 1].x, waypoints[i + 1].y)
-        line:setStrokeColor(0.2, 0.2, 0.35, 0.8)
-        line.strokeWidth = 30
-    end
-    -- Start marker
-    local startCircle = display.newCircle(self.pathGroup, waypoints[1].x, waypoints[1].y, 20)
-    startCircle:setFillColor(0, 0.5, 0)
-    startCircle:setStrokeColor(0, 1, 0, 0.5)
-    startCircle.strokeWidth = 2
-    -- End marker (player base)
-    local endPt = waypoints[#waypoints]
-    self.baseMarker = display.newCircle(self.pathGroup, endPt.x, endPt.y, 25)
-    self.baseMarker:setFillColor(0.8, 0.1, 0.1)
-    self.baseMarker:setStrokeColor(1, 0.2, 0.2, 0.6)
-    self.baseMarker.strokeWidth = 3
+        -- Path visual
+        local waypoints = Path.getWaypoints()
+        love.graphics.setColor(0.2, 0.2, 0.35, 0.8)
+        love.graphics.setLineWidth(30)
+        for i = 1, #waypoints - 1 do
+            love.graphics.line(waypoints[i].x, waypoints[i].y, waypoints[i + 1].x, waypoints[i + 1].y)
+        end
+
+        -- Start marker
+        love.graphics.setColor(0, 0.5, 0)
+        love.graphics.circle("fill", waypoints[1].x, waypoints[1].y, 20)
+        love.graphics.setColor(0, 1, 0, 0.5)
+        love.graphics.setLineWidth(2)
+        love.graphics.circle("line", waypoints[1].x, waypoints[1].y, 20)
+
+        -- End marker (player base)
+        local endPt = waypoints[#waypoints]
+        love.graphics.setColor(0.8, 0.1, 0.1)
+        love.graphics.circle("fill", endPt.x, endPt.y, 25)
+        love.graphics.setColor(1, 0.2, 0.2, 0.6)
+        love.graphics.setLineWidth(3)
+        love.graphics.circle("line", endPt.x, endPt.y, 25)
+    end)
 end
 
 function GameLoop:startRun()
@@ -90,19 +99,19 @@ function GameLoop:startRun()
     -- Clear old entities
     self:clearEntities()
 
-    -- Place turrets based on unlocked turrets
+    -- Place turrets
     self:placeTurrets()
 
     -- Start wave 1
     self.waveManager:startNextWave(PS.run.wave)
     self.waveStartGold = PS.run.gold
 
-    -- Hide menu UI if shown
-    self:hideMenuUI()
+    self.showingMenu = false
+    self.showingUpgrade = false
+    self.showingPause = false
 end
 
 function GameLoop:placeTurrets()
-    -- Clear existing
     for _, t in ipairs(self.turrets) do t:destroy() end
     self.turrets = {}
 
@@ -110,7 +119,6 @@ function GameLoop:placeTurrets()
     local turretKeys = {}
     for _, t in ipairs(unlocked) do table.insert(turretKeys, t) end
 
-    -- Fill remaining slots with what we have (up to TURRET_ANCHORS count)
     local maxSlots = math.min(#C.TURRET_ANCHORS, #turretKeys + PS.run.extraTurretCount)
     for i = 1, maxSlots do
         local typeKey = turretKeys[(i - 1) % #turretKeys + 1]
@@ -120,7 +128,6 @@ function GameLoop:placeTurrets()
         local turret = Turret.new(typeKey, ax, ay, PS.data.playerLevel)
         turret:setLevel(PS:getTurretLevel(typeKey))
         table.insert(self.turrets, turret)
-        self.turretGroup:insert(turret.group)
     end
 end
 
@@ -141,6 +148,22 @@ function GameLoop:clearEntities()
 end
 
 function GameLoop:update(dt)
+    self.pulseTime = self.pulseTime + dt
+
+    -- Update death/muzzle effects
+    for i = #self.deathEffects, 1, -1 do
+        self.deathEffects[i].timer = self.deathEffects[i].timer - dt
+        if self.deathEffects[i].timer <= 0 then
+            table.remove(self.deathEffects, i)
+        end
+    end
+    for i = #self.muzzleFlashes, 1, -1 do
+        self.muzzleFlashes[i].timer = self.muzzleFlashes[i].timer - dt
+        if self.muzzleFlashes[i].timer <= 0 then
+            table.remove(self.muzzleFlashes, i)
+        end
+    end
+
     if self.state == C.STATE.PLAYING then
         self.waveManager:update(dt)
 
@@ -149,7 +172,6 @@ function GameLoop:update(dt)
             local enemy = self.enemies[i]
             enemy:update(dt, PS.run.slowField)
             if enemy.reachedEnd then
-                -- Damage player
                 if PS.run.shieldInstances > 0 then
                     PS.run.shieldInstances = PS.run.shieldInstances - 1
                 else
@@ -157,7 +179,6 @@ function GameLoop:update(dt)
                 end
                 table.remove(self.enemies, i):destroy()
             elseif enemy.dead then
-                -- Killed — award XP and gold
                 local isBoss = (enemy.typeKey == "BOSS")
                 local baseGold = enemy.def.goldValue
                 local goldMult = self.waveManager.isBonusWave and C.WAVE.BONUS_GOLD_MULT or 1.0
@@ -166,8 +187,7 @@ function GameLoop:update(dt)
                 else
                     PS:addGold(math.floor(baseGold * goldMult))
                 end
-                local xpGain = enemy.def.xpValue
-                PS:addXP(xpGain)
+                PS:addXP(enemy.def.xpValue)
                 PS.run.enemiesKilled = PS.run.enemiesKilled + 1
                 self.waveManager:onEnemyKilled()
                 table.remove(self.enemies, i):destroy()
@@ -192,15 +212,14 @@ function GameLoop:update(dt)
 
         -- Check wave clear
         if self.waveManager:isWaveClear() and self.waveManager.waveTransitionTimer <= 0 then
-            -- Wave complete — move to upgrade select
             self.state = C.STATE.UPGRADE_SELECT
             self.upgradeChoices = US.getChoices(3, PS)
-            self:showUpgradeScreen()
+            self.upgradeScreen:show(self.upgradeChoices)
+            self.showingUpgrade = true
         end
 
         -- Check player HP
         if PS.run.hp <= 0 then
-            -- Player base destroyed — bank what we have
             PS:bankProgress()
             self.state = C.STATE.MENU
             self:showMenuUI()
@@ -293,7 +312,6 @@ function GameLoop:onProjectileHit(proj)
             end
         end
     else
-        -- Basic single target
         if proj.target and not proj.target.dead then
             proj.target:takeDamage(proj.damage)
         end
@@ -302,30 +320,172 @@ end
 
 function GameLoop:onUpgradeSelected(upgradeId)
     US.applyUpgrade(upgradeId, PS, self)
-    self:hideUpgradeScreen()
-
-    -- Advance wave
+    self.upgradeScreen:hide()
+    self.showingUpgrade = false
     PS.run.wave = PS.run.wave + 1
     self.waveManager:startNextWave(PS.run.wave)
     self.waveStartGold = PS.run.gold
-
     self.state = C.STATE.PLAYING
 end
 
--- UI stubs (implemented in ui/ files)
-function GameLoop:showUpgradeScreen() end
-function GameLoop:hideUpgradeScreen() end
-function GameLoop:showMenuUI() end
-function GameLoop:hideMenuUI() end
+function GameLoop:onPauseTap()
+    if self.state == C.STATE.PLAYING then
+        self.state = C.STATE.PAUSED
+        self.pauseMenu:show()
+        self.showingPause = true
+    end
+end
+
+function GameLoop:showMenuUI()
+    self.mainMenu:show()
+    self.showingMenu = true
+end
+
+function GameLoop:hideMenuUI()
+    self.mainMenu:hide()
+    self.showingMenu = false
+end
+
+function GameLoop:addDeathEffect(x, y, r, cr, cg, cb)
+    -- Burst particles
+    for i = 1, 8 do
+        local angle = (i / 8) * math.pi * 2
+        local dist = r * 1.5
+        local px = x + math.cos(angle) * dist
+        local py = y + math.sin(angle) * dist
+        table.insert(self.deathEffects, {
+            x = px, y = py, r = 6,
+            cr = cr, cg = cg, cb = cb,
+            timer = 0.3, totalTimer = 0.3
+        })
+    end
+    -- Central burst
+    table.insert(self.deathEffects, {
+        x = x, y = y, r = r * 0.5,
+        cr = 1, cg = 1, cb = 1,
+        timer = 0.35, totalTimer = 0.35
+    })
+end
+
+function GameLoop:addMuzzleFlash(x, y, r, cr, cg, cb)
+    table.insert(self.muzzleFlashes, {
+        x = x, y = y, r = r,
+        cr = cr, cg = cg, cb = cb,
+        timer = 0.15, totalTimer = 0.15
+    })
+end
+
+function GameLoop:onMousePressed(x, y, button)
+    if button ~= 1 then return false end
+
+    -- Check upgrade screen
+    if self.showingUpgrade and self.upgradeScreen then
+        local handled = self.upgradeScreen:onMousePressed(x, y, button)
+        if handled then return true end
+    end
+
+    -- Check pause menu
+    if self.showingPause and self.pauseMenu then
+        local handled = self.pauseMenu:onMousePressed(x, y, button)
+        if handled then return true end
+    end
+
+    -- Check main menu
+    if self.showingMenu and self.mainMenu then
+        local handled = self.mainMenu:onMousePressed(x, y, button)
+        if handled then return true end
+    end
+
+    -- Check HUD (pause button)
+    if not self.showingMenu and not self.showingUpgrade and not self.showingPause then
+        if self.hud then
+            local handled = self.hud:onMousePressed(x, y, button)
+            if handled then return true end
+        end
+    end
+
+    return false
+end
+
+function GameLoop:draw()
+    -- Background (always drawn)
+    love.graphics.draw(self.bgCanvas, 0, 0)
+
+    -- Enemies
+    for _, enemy in ipairs(self.enemies) do
+        if enemy.canvas then
+            love.graphics.draw(enemy.canvas, enemy.x, enemy.y, 0, 1, 1, C.WIDTH / 2, C.HEIGHT / 2)
+        end
+        -- HP bar (screen space, no rotation)
+        if not enemy.dead and not enemy.reachedEnd and enemy.maxHP then
+            local hpRatio = math.max(0, enemy.hp / enemy.maxHP)
+            local barW = enemy.radius * 2.8
+            local barH = 4
+            local barX = enemy.x - barW / 2
+            local barY = enemy.y - enemy.radius - 16
+            love.graphics.setColor(0.15, 0.15, 0.15)
+            love.graphics.rectangle("fill", barX, barY, barW, barH)
+            love.graphics.setColor(C.COLOR.HP_BAR[1], C.COLOR.HP_BAR[2], C.COLOR.HP_BAR[3])
+            love.graphics.rectangle("fill", barX, barY, barW * hpRatio, barH)
+        end
+    end
+
+    -- Turrets
+    for _, turret in ipairs(self.turrets) do
+        if turret.canvas then
+            love.graphics.draw(turret.canvas, turret.x, turret.y)
+        end
+    end
+
+    -- Projectiles
+    for _, proj in ipairs(self.projectiles) do
+        if proj.canvas then
+            love.graphics.draw(proj.canvas, proj.x, proj.y)
+        end
+    end
+
+    -- Death effects
+    for _, e in ipairs(self.deathEffects) do
+        local alpha = e.timer / e.totalTimer
+        love.graphics.setColor(e.cr, e.cg, e.cb, alpha)
+        local scale = 1 + (1 - alpha) * 3
+        love.graphics.circle("fill", e.x, e.y, e.r * scale)
+    end
+
+    -- Muzzle flashes
+    for _, m in ipairs(self.muzzleFlashes) do
+        local alpha = m.timer / m.totalTimer
+        -- White flash
+        love.graphics.setColor(1, 1, 1, alpha * 0.9)
+        love.graphics.circle("fill", m.x, m.y, m.r * 0.5 * (1 + (1 - alpha) * 2))
+        -- Color flash
+        love.graphics.setColor(m.cr, m.cg, m.cb, alpha)
+        love.graphics.circle("fill", m.x, m.y, m.r * 0.3 * (1 + (1 - alpha) * 3))
+    end
+
+    -- UI layers
+    if not self.showingMenu and not self.showingUpgrade and not self.showingPause then
+        if self.hud and self.hud.visible then
+            love.graphics.draw(self.hud.canvas, 0, 0)
+        end
+    end
+
+    if self.showingMenu and self.mainMenu and self.mainMenu.visible then
+        love.graphics.draw(self.mainMenu.canvas, 0, 0)
+    end
+
+    if self.showingUpgrade and self.upgradeScreen and self.upgradeScreen.visible then
+        love.graphics.draw(self.upgradeScreen.canvas, 0, 0)
+    end
+
+    if self.showingPause and self.pauseMenu and self.pauseMenu.visible then
+        love.graphics.draw(self.pauseMenu.canvas, 0, 0)
+    end
+end
 
 function GameLoop:destroy()
     self:clearEntities()
-    self.bgGroup:removeSelf()
-    self.pathGroup:removeSelf()
-    self.enemyGroup:removeSelf()
-    self.turretGroup:removeSelf()
-    self.projGroup:removeSelf()
-    self.uiGroup:removeSelf()
+    self.bgCanvas = nil
 end
 
 return GameLoop

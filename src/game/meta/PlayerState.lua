@@ -1,4 +1,4 @@
--- PlayerState: in-memory + banked player state
+-- PlayerState: in-memory + banked player state (LÖVE2D version)
 local P = require("game.meta.Persistence")
 local C = require("consts")
 
@@ -21,7 +21,6 @@ function PS.init()
         extraTurretCount = 0,
         tempUpgradeCount = 0,
         enemiesKilled = 0,
-        activeTurrets = {},
     }
     PS:computeStartingGold()
 end
@@ -72,7 +71,7 @@ function PS:addXP(amount)
         PS.run.xp = PS.run.xp - needed
         PS.data.playerLevel = math.min(PS.data.playerLevel + 1, C.PLAYER.MAX_LEVEL)
         PS:save()
-        return true -- leveled up
+        return true
     end
     return false
 end
@@ -83,11 +82,6 @@ end
 
 function PS:addGold(amount)
     local boost = PS.run.goldBoost
-    local bossBoost = 0
-    for _, up in ipairs(PS.data.permanentUpgrades or {}) do
-        if up == "boss_bonus_1" then bossBoost = bossBoost + C.UPGRADE.PERM_GOLD_BOSS end
-    end
-    -- applied externally via isBoss flag
     local gained = math.floor(amount * (1 + boost))
     PS.run.gold = PS.run.gold + gained
 end
@@ -103,7 +97,6 @@ function PS:addGoldBoss(amount)
 end
 
 function PS:bankProgress()
-    -- Called on "Bank & Exit" — save all run progress
     PS.data.bankedGold = PS.data.bankedGold + PS.run.gold
     PS.data.wavesCleared = math.max(PS.data.wavesCleared, PS.run.wave - 1)
     PS.data.highestWave = math.max(PS.data.highestWave, PS.run.wave - 1)
@@ -111,7 +104,6 @@ function PS:bankProgress()
 end
 
 function PS:discardRun()
-    -- Called on "Quit" — no bank, just save level data
     PS:save()
 end
 
