@@ -5,6 +5,7 @@ local MainMenu = require("ui.MainMenu")
 local HUD = require("ui.HUD")
 local UpgradeScreen = require("ui.UpgradeScreen")
 local PauseMenu = require("ui.PauseMenu")
+local Haptics = require("lib.Haptics")
 
 -- Initialize LÖVE2D
 function love.load()
@@ -13,15 +14,13 @@ function love.load()
         fullscreen = false,
         resizable = false,
         vsync = true,
+        minwidth = 540,
+        minheight = 960,
     })
     love.graphics.setBackgroundColor(C.COLOR.BACKGROUND[1], C.COLOR.BACKGROUND[2], C.COLOR.BACKGROUND[3])
 
-    -- Scale canvas to fit screen
-    local sw, sh = love.window.getMode()
-    local scaleX = sw / C.WIDTH
-    local scaleY = sh / C.HEIGHT
-    local scale = math.min(scaleX, scaleY)
-    -- We'll use letterbox-style centering in draw
+    -- Initialize haptics
+    Haptics.init()
 
     -- Create game
     game = GameLoop.new()
@@ -46,8 +45,11 @@ function love.load()
     lastTime = love.timer.getTime()
 
     -- For letterboxing
-    screenW, screenH = sw, sh
+    screenW, screenH = love.window.getMode()
     offsetX, offsetY = 0, 0
+
+    -- Mobile-friendly: disable screensaver
+    love.system.setPowerSaving(true)
 end
 
 function love.update(dt)
@@ -78,8 +80,8 @@ function love.draw()
     love.graphics.pop()
 end
 
-function love.mousepressed(x, y, button, istouch, presses)
-    -- Convert screen coords to game coords
+-- Convert screen coords to game coords
+local function screenToGame(x, y)
     local sw, sh = love.window.getMode()
     local scaleX = sw / C.WIDTH
     local scaleY = sh / C.HEIGHT
@@ -89,10 +91,38 @@ function love.mousepressed(x, y, button, istouch, presses)
 
     local gx = (x - offsetX) / scale
     local gy = (y - offsetY) / scale
+    return gx, gy
+end
 
+function love.mousepressed(x, y, button, istouch, presses)
+    if button ~= 1 then return end
+    local gx, gy = screenToGame(x, y)
     if gx >= 0 and gx <= C.WIDTH and gy >= 0 and gy <= C.HEIGHT then
         if game then
-            game:onMousePressed(gx, gy, button)
+            game:onPress(gx, gy)
+        end
+    end
+end
+
+-- Touch input (multi-touch)
+function love.touchpressed(id, x, y, dx, dy, pressure)
+    local gx, gy = screenToGame(x, y)
+    if game then
+        Haptics.press()
+        game:onPress(gx, gy)
+    end
+end
+
+-- Keyboard / Android back button
+function love.keypressed(key)
+    if key == "escape" or key == "back" or key == "backspace" then
+        if game then
+            game:onBack()
+        end
+    end
+    if key == "p" or key == "pause" then
+        if game then
+            game:onPauseTap()
         end
     end
 end

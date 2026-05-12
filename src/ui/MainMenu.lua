@@ -254,29 +254,24 @@ function MainMenu:destroy()
     self.canvas = nil
 end
 
-function MainMenu:onMousePressed(x, y, button)
-    if not self.visible then return false end
-    if button ~= 1 then return false end
-
+function MainMenu:onPress(x, y)
     -- Check turret cards
     for _, card in ipairs(self.turretCards) do
         if x >= card.x and x <= card.x + card.w and y >= card.y and y <= card.y + card.h then
             self:onTurretTap(card.tkey, card)
-            return true
+            return {x=card.x, y=card.y, w=card.w, h=card.h, r=0, g=0.6, b=0.4}
         end
     end
 
     -- Check buttons
     for _, btn in ipairs(self.buttons) do
-        if btn.visible ~= false then
-            if x >= btn.x and x <= btn.x + btn.w and y >= btn.y and y <= btn.y + btn.h then
-                btn.onTap()
-                return true
-            end
+        if x >= btn.x and x <= btn.x + btn.w and y >= btn.y and y <= btn.y + btn.h then
+            btn.onTap()
+            return {x=btn.x, y=btn.y, w=btn.w, h=btn.h, r=btn.color[1], g=btn.color[2], b=btn.color[3]}
         end
     end
 
-    return false
+    return nil
 end
 
 return MainMenu

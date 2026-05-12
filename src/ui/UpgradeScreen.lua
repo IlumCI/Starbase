@@ -151,18 +151,13 @@ function UpgradeScreen:destroy()
     self.canvas = nil
 end
 
-function UpgradeScreen:onMousePressed(x, y, button)
-    if not self.visible then return false end
-    if button ~= 1 then return false end
-
+function UpgradeScreen:onPress(x, y)
     for _, card in ipairs(self.cards) do
-        if card.visible then
-            if x >= card.x and x <= card.x + card.w and y >= card.y and y <= card.y + card.h then
-                if card.upgradeId then
-                    self.gameLoop:onUpgradeSelected(card.upgradeId)
-                end
-                return true
+        if x >= card.x and x <= card.x + card.w and y >= card.y and y <= card.y + card.h then
+            if card.upgradeId then
+                self.gameLoop:onUpgradeSelected(card.upgradeId)
             end
+            return {x=card.x, y=card.y, w=card.w, h=card.h, r=card.color[1], g=card.color[2], b=card.color[3]}
         end
     end
 

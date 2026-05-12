@@ -141,15 +141,13 @@ function HUD:destroy()
     self.canvas = nil
 end
 
-function HUD:onMousePressed(x, y, button)
-    if not self.visible then return false end
-    if button ~= 1 then return false end
+function HUD:onPress(x, y)
     local btn = self.pauseBtn
     if x >= btn.x and x <= btn.x + btn.w and y >= btn.y and y <= btn.y + btn.h then
         self.gameLoop:onPauseTap()
-        return true
+        return { btn.x, btn.y, btn.w, btn.h, 0.4, 0.4, 0.5 }
     end
-    return false
+    return nil
 end
 
 return HUD

@@ -47,6 +47,10 @@ function GameLoop.new()
     self.upgradeScreen = nil
     self.pauseMenu = nil
 
+    -- Press highlight (touch feedback)
+    self.pressedButton = nil  -- {x, y, w, h, r, g, b} or nil
+    self.pressHighlightAlpha = 0  -- 0-1 for fade out
+
     return self
 end
 
@@ -149,6 +153,15 @@ end
 
 function GameLoop:update(dt)
     self.pulseTime = self.pulseTime + dt
+
+    -- Fade out press highlight
+    if self.pressedButton then
+        self.pressHighlightAlpha = self.pressHighlightAlpha - dt * 4
+        if self.pressHighlightAlpha <= 0 then
+            self.pressedButton = nil
+            self.pressHighlightAlpha = 0
+        end
+    end
 
     -- Update death/muzzle effects
     for i = #self.deathEffects, 1, -1 do
@@ -336,6 +349,76 @@ function GameLoop:onPauseTap()
     end
 end
 
+-- Unified press handler: returns button highlight data or nil
+function GameLoop:onPress(x, y)
+    local function makeHighlight(btn)
+        return { x = btn.x, y = btn.y, w = btn.w, h = btn.h, r = btn.r or 0.5, g = btn.g or 0.5, b = btn.b or 0.5 }
+    end
+
+    -- Check upgrade screen
+    if self.showingUpgrade and self.upgradeScreen then
+        local result = self.upgradeScreen:onPress(x, y)
+        if result then
+            self.pressedButton = result
+            self.pressHighlightAlpha = 1.0
+            return true
+        end
+    end
+
+    -- Check pause menu
+    if self.showingPause and self.pauseMenu then
+        local result = self.pauseMenu:onPress(x, y)
+        if result then
+            self.pressedButton = result
+            self.pressHighlightAlpha = 1.0
+            return true
+        end
+    end
+
+    -- Check main menu
+    if self.showingMenu and self.mainMenu then
+        local result = self.mainMenu:onPress(x, y)
+        if result then
+            self.pressedButton = result
+            self.pressHighlightAlpha = 1.0
+            return true
+        end
+    end
+
+    -- Check HUD (pause button)
+    if not self.showingMenu and not self.showingUpgrade and not self.showingPause then
+        if self.hud then
+            local result = self.hud:onPress(x, y)
+            if result then
+                self.pressedButton = result
+                self.pressHighlightAlpha = 1.0
+                return true
+            end
+        end
+    end
+
+    self.pressedButton = nil
+    return false
+end
+
+-- Back button / escape key handler
+function GameLoop:onBack()
+    if self.showingUpgrade then
+        -- Can't go back from upgrade selection
+        return
+    end
+    if self.showingPause then
+        -- Resume from pause
+        self.pauseMenu:hide()
+        self.showingPause = false
+        self.state = C.STATE.PLAYING
+    elseif self.state == C.STATE.PLAYING then
+        self:onPauseTap()
+    elseif self.state == C.STATE.PAUSED then
+        -- Already handled above
+    end
+end
+
 function GameLoop:showMenuUI()
     self.mainMenu:show()
     self.showingMenu = true
@@ -373,38 +456,6 @@ function GameLoop:addMuzzleFlash(x, y, r, cr, cg, cb)
         cr = cr, cg = cg, cb = cb,
         timer = 0.15, totalTimer = 0.15
     })
-end
-
-function GameLoop:onMousePressed(x, y, button)
-    if button ~= 1 then return false end
-
-    -- Check upgrade screen
-    if self.showingUpgrade and self.upgradeScreen then
-        local handled = self.upgradeScreen:onMousePressed(x, y, button)
-        if handled then return true end
-    end
-
-    -- Check pause menu
-    if self.showingPause and self.pauseMenu then
-        local handled = self.pauseMenu:onMousePressed(x, y, button)
-        if handled then return true end
-    end
-
-    -- Check main menu
-    if self.showingMenu and self.mainMenu then
-        local handled = self.mainMenu:onMousePressed(x, y, button)
-        if handled then return true end
-    end
-
-    -- Check HUD (pause button)
-    if not self.showingMenu and not self.showingUpgrade and not self.showingPause then
-        if self.hud then
-            local handled = self.hud:onMousePressed(x, y, button)
-            if handled then return true end
-        end
-    end
-
-    return false
 end
 
 function GameLoop:draw()
@@ -480,6 +531,18 @@ function GameLoop:draw()
 
     if self.showingPause and self.pauseMenu and self.pauseMenu.visible then
         love.graphics.draw(self.pauseMenu.canvas, 0, 0)
+    end
+
+    -- Press highlight overlay (touch feedback)
+    if self.pressedButton then
+        local b = self.pressedButton
+        local a = math.max(0, self.pressHighlightAlpha)
+        love.graphics.setColor(b.r, b.g, b.b, 0.25 * a)
+        love.graphics.rectangle("fill", b.x, b.y, b.w, b.h)
+        love.graphics.setColor(b.r, b.g, b.b, 0.5 * a)
+        love.graphics.setLineWidth(3)
+        love.graphics.rectangle("line", b.x, b.y, b.w, b.h)
+        love.graphics.setLineWidth(1)
     end
 end
 

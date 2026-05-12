@@ -210,4 +210,20 @@ C.AUDIO = {
     AMBIENT_VOLUME = 0.15,
 }
 
+-- Font sizes (scale factors for Font.lua)
+C.FONT_SIZE = {
+    TITLE = 64,
+    HEADING = 40,
+    BODY = 28,
+    SMALL = 20,
+    TINY = 16,
+}
+
+-- Haptic intensity levels
+C.HAPTIC = {
+    LIGHT = 10,
+    MEDIUM = 25,
+    HEAVY = 50,
+}
+
 return C
