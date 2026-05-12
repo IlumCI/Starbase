@@ -44,8 +44,19 @@ jobs:
 
       - name: Accept SDK licenses & install components
         run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \
+          export ANDROID_HOME=/opt/android-sdk
+          export ANDROID_SDK_ROOT=/opt/android-sdk
+
+          # Find the actual sdkmanager location
+          SDKMANAGER=$(find $ANDROID_HOME -name sdkmanager -type f 2>/dev/null | head -1)
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found in expected locations"
+            ls -la $ANDROID_HOME/cmdline-tools/ 2>/dev/null || echo "cmdline-tools dir doesn't exist"
+            exit 1
+          fi
+          echo "Found sdkmanager: $SDKMANAGER"
+          yes | $SDKMANAGER --licenses 2>/dev/null || true
+          $SDKMANAGER \
             "platform-tools" \
             "platforms;android-34" \
             "build-tools;34.0.0"
