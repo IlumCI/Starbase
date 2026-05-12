@@ -26,7 +26,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 50
 
     steps:
       - name: Checkout code
@@ -38,66 +38,72 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept SDK licenses & install components
+      - name: Install Android SDK
         run: |
-          export ANDROID_HOME=/opt/android-sdk
-          export ANDROID_SDK_ROOT=/opt/android-sdk
+          # Install Android command line tools
+          mkdir -p $HOME/android-sdk/cmdline-tools
+          cd $HOME/android-sdk/cmdline-tools
 
-          SDKMANAGER=$(find $ANDROID_HOME -name sdkmanager -type f 2>/dev/null | head -1)
-          if [ -z "$SDKMANAGER" ]; then
-            echo "sdkmanager not found"
-            ls -la $ANDROID_HOME/cmdline-tools/ 2>/dev/null || echo "no cmdline-tools"
-            exit 1
-          fi
-          echo "Found sdkmanager: $SDKMANAGER"
-          yes | $SDKMANAGER --licenses 2>/dev/null || true
-          $SDKMANAGER "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          wget -q "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" -O cmdline-tools.zip
+          unzip -q cmdline-tools.zip
+          mv cmdline-tools latest
+          rm cmdline-tools.zip
 
-      - name: Set environment variables
-        run: |
-          echo "ANDROID_HOME=/opt/android-sdk" >> $GITHUB_ENV
-          echo "ANDROID_SDK_ROOT=/opt/android-sdk" >> $GITHUB_ENV
+          export ANDROID_HOME=$HOME/android-sdk
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
+          export PATH=$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
+
+          echo "ANDROID_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> $GITHUB_ENV
           echo "JAVA_HOME=${{ steps.setup-java.outputs.java-home }}" >> $GITHUB_ENV
+
+          # Accept licenses and install required SDK components
+          yes | sdkmanager --licenses 2>/dev/null || true
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          echo "SDK setup complete"
 
       - name: Create love file
         run: |
           cd src
-          # Create .love archive from all Lua files
           zip -r ../game.love .
           cd ..
           echo "Created game.love ($(du -h game.love | cut -f1))"
 
       - name: Download love-android-serviceman
         run: |
-          wget -q "https://github.com/love2d-community/love-android-serviceman/releases/download/continuous/serviceman-$(uname -m)-linux.zip" -O /tmp/serviceman.zip
+          ARCH=$(uname -m)
+          if [ "$ARCH" = "x86_64" ]; then
+            wget -q "https://github.com/love2d-community/love-android-serviceman/releases/download/continuous/serviceman-x86_64-linux.zip" -O /tmp/serviceman.zip
+          else
+            wget -q "https://github.com/love2d-community/love-android-serviceman/releases/download/continuous/serviceman-aarch64-linux.zip" -O /tmp/serviceman.zip
+          fi
           unzip -q /tmp/serviceman.zip -d /tmp/
           chmod +x /tmp/serviceman
           /tmp/serviceman --version || true
 
       - name: Build APK
         run: |
-          export ANDROID_HOME=/opt/android-sdk
-          export ANDROID_SDK_ROOT=/opt/android-sdk
+          export ANDROID_HOME=$HOME/android-sdk
+          export ANDROID_SDK_ROOT=$HOME/android-sdk
           export JAVA_HOME="${{ steps.setup-java.outputs.java-home }}"
-          export PATH=$JAVA_HOME/bin:$PATH
+          export PATH=$JAVA_HOME/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH
 
           mkdir -p output
 
-          /tmp/serviceman \
-            --app-name "$APP_NAME" \
-            --package "$PACKAGE" \
-            --version "$VERSION" \
-            --input game.love \
-            --output-dir output/ \
-            --keystore-release-alias "$KEY_ALIAS" \
-            --keystore-release-key-pass "$KEY_PASS" \
-            --keystore-release-pass "$KEYSTORE_PASS" || true
-
-          # If serviceman fails (no keystore), try basic build
-          if ! ls output/*.apk 2>/dev/null; then
+          # Try with keystore env vars if provided, otherwise unsigned
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > /tmp/keystore.jks
+            /tmp/serviceman \
+              --app-name "$APP_NAME" \
+              --package "$PACKAGE" \
+              --version "$VERSION" \
+              --input game.love \
+              --output-dir output/ \
+              --keystore /tmp/keystore.jks \
+              --keystore-release-alias "$KEY_ALIAS" \
+              --keystore-release-key-pass "$KEY_PASS" \
+              --keystore-release-pass "$KEYSTORE_PASS"
+          else
             /tmp/serviceman \
               --app-name "$APP_NAME" \
               --package "$PACKAGE" \
@@ -118,6 +124,7 @@ jobs:
           else
             echo "No APK found in output/"
             find output/ -type f | head -20
+            exit 1
           fi
 
       - name: Upload APK artifact
@@ -131,8 +138,10 @@ jobs:
       - name: Summary
         run: |
           if [ -n "${{ env.APK }}" ]; then
-            echo "Build succeeded"
+            echo "### Build Succeeded" >> $GITHUB_STEP_SUMMARY
+            echo "APK: \`${{ env.APK }}\`" >> $GITHUB_STEP_SUMMARY
             ls -lh "${{ env.APK }}"
           else
-            echo "Build failed — check logs above"
+            echo "Build failed — check logs above" >> $GITHUB_STEP_SUMMARY
+            exit 1
           fi
