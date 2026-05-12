@@ -4,7 +4,7 @@ local C = require("consts")
 local Projectile = {}
 Projectile.__index = Projectile
 
-function Projectile.new(turret, target, damage, special)
+function Projectile.new(turret, target, damage, special, leadX, leadY)
     local self = setmetatable({}, Projectile)
     self.turretDef = turret.def
     self.damage = damage
@@ -18,11 +18,13 @@ function Projectile.new(turret, target, damage, special)
 
     -- Target (live reference for tracking)
     self.target = target
-    self.targetX = target.x
-    self.targetY = target.y
+    -- Use ML lead target position if provided, else fall back to target position
+    self.targetX = leadX or target.x
+    self.targetY = leadY or target.y
 
     self.speed = C.PROJECTILE_SPEED
     self.dead = false
+    self.hitSomething = false  -- set true when it damages any enemy
 
     -- Track which enemies were already hit (for pierce)
     self.hitTargets = {}

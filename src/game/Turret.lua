@@ -29,6 +29,16 @@ function Turret.new(towerTypeKey, anchorX, anchorY)
     -- Muzzle flash flag (handled by GameLoop)
     self.muzzleFlashTimer = 0
 
+    -- ML reference (set by GameLoop when placing turrets)
+    self.ml = nil
+
+    -- Lead target position (computed by ML trajectory predictor)
+    self.leadTargetX = nil
+    self.leadTargetY = nil
+
+    -- Canvas
+    self.useNNTargeting = false
+
     -- Canvas
     self.canvas = love.graphics.newCanvas(C.WIDTH, C.HEIGHT)
     self:buildVisuals()
@@ -39,6 +49,11 @@ end
 function Turret:setLevel(level)
     self.turretLevel = level
     self:recomputeStats()
+end
+
+-- Inject ML reference from GameLoop (called when placing turrets)
+function Turret:setML(ml)
+    self.ml = ml
 end
 
 function Turret:recomputeStats()
@@ -330,16 +345,35 @@ function Turret:update(dt, enemies, projectiles, gameLoop)
 end
 
 function Turret:findTargetAndFire(enemies, projectiles, gameLoop)
-    self.target = self:findTarget(enemies)
-    if not self.target then return end
+    -- Use ML-based targeting when available
+    local target
+    if self.ml and gameLoop and gameLoop.ml then
+        target = gameLoop.ml:selectTarget(enemies, self)
+    else
+        target = self:findTarget(enemies)
+    end
+    self.target = target
+    if not target then return end
 
-    local dx = self.target.x - self.x
-    local dy = self.target.y - self.y
+    -- Compute lead target position using ML trajectory predictor (for fast enemies)
+    local leadX, leadY
+    if self.ml and gameLoop and gameLoop.ml then
+        leadX, leadY = gameLoop.ml:computeIntercept(self.x, self.y, target, C.PROJECTILE_SPEED)
+    else
+        leadX, leadY = target.x, target.y
+    end
+
+    self.leadTargetX = leadX
+    self.leadTargetY = leadY
+
+    -- Barrel aims at lead position
+    local dx = leadX - self.x
+    local dy = leadY - self.y
     self.barrelAngle = math.atan2(dy, dx)
 
     -- Fire if ready
     if self.cooldown <= 0 then
-        self:fire(projectiles)
+        self:fire(projectiles, target, leadX, leadY)
         self.cooldown = 1.0 / self.fireRate
     end
 end
@@ -365,10 +399,10 @@ function Turret:findTarget(enemies)
     return best
 end
 
-function Turret:fire(projectiles)
-    if not self.target then return end
+function Turret:fire(projectiles, target, leadX, leadY)
+    if not target then return end
     local Projectile = require("game.Projectile")
-    local proj = Projectile.new(self, self.target, self.damage, self.def.special)
+    local proj = Projectile.new(self, target, self.damage, self.def.special, leadX, leadY)
     table.insert(projectiles, proj)
 
     -- Muzzle flash flag (GameLoop handles visual)

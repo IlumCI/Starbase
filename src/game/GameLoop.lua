@@ -1,4 +1,4 @@
--- GameLoop: core game state machine (LÖVE2D port)
+-- GameLoop: core game state machine (LÖVE2D port) + ML integration
 local C = require("consts")
 local PS = require("game.meta.PlayerState")
 local Path = require("game.Path")
@@ -6,6 +6,7 @@ local Enemy = require("game.Enemy")
 local Turret = require("game.Turret")
 local WM = require("game.WaveManager")
 local US = require("game.UpgradeSystem")
+local ML = require("game.ml.MLManager")
 
 local GameLoop = {}
 GameLoop.__index = GameLoop
@@ -33,8 +34,12 @@ function GameLoop.new()
     self.pulseTime = 0
 
     -- Death effect pool (transient circles rendered in draw)
-    self.deathEffects = {}  -- { {x, y, r, cr, cg, cb, timer}, ... }
-    self.muzzleFlashes = {}  -- { {x, y, r, cr, cg, cb, timer}, ... }
+    self.deathEffects = {}  -- { {x, y, r, cr, cg, cb, timer, totalTimer}, ... }
+    self.muzzleFlashes = {}  -- { {x, y, r, cr, cg, cb, timer, totalTimer}, ... }
+
+    -- ML death particle pool: particles spawned from ML destruction generator
+    -- Each entry: {x, y, vx, vy, size, r, g, b, lifetime, maxLifetime}
+    self.mlParticles = {}
 
     -- UI visibility
     self.showingMenu = false
@@ -50,6 +55,15 @@ function GameLoop.new()
     -- Press highlight (touch feedback)
     self.pressedButton = nil  -- {x, y, w, h, r, g, b} or nil
     self.pressHighlightAlpha = 0  -- 0-1 for fade out
+
+    -- ML system (owns all neural networks: targeting, trajectory, evasion, destruction, adaptor)
+    self.ml = ML.new()
+
+    -- ML stats for HUD/debug
+    self.mlStats = { wavesTrained = 0, avgLoss = 0, samplesCollected = 0 }
+
+    -- IR/thermal visual mode
+    self.irEnabled = false  -- toggle with HUD button
 
     return self
 end
@@ -103,7 +117,15 @@ function GameLoop:startRun()
     -- Clear old entities
     self:clearEntities()
 
-    -- Place turrets
+    -- Re-init ML for fresh run
+    self.ml:reset()
+    self.ml:onRunStart()
+
+    -- Apply difficulty multipliers from ML adaptor
+    local mults = self.ml:getDifficultyMultipliers(PS.run.wave)
+    self.waveManager:applyMultipliers(mults)
+
+    -- Place turrets with NN targeting enabled
     self:placeTurrets()
 
     -- Start wave 1
@@ -131,6 +153,8 @@ function GameLoop:placeTurrets()
         local ay = anchor.y * C.HEIGHT
         local turret = Turret.new(typeKey, ax, ay, PS.data.playerLevel)
         turret:setLevel(PS:getTurretLevel(typeKey))
+        -- Inject ML reference into turret for targeting + trajectory prediction
+        turret:setML(self.ml)
         table.insert(self.turrets, turret)
     end
 end
@@ -149,8 +173,13 @@ function GameLoop:clearEntities()
     self.enemies = {}
     self.turrets = {}
     self.projectiles = {}
+    self.deathEffects = {}
+    self.mlParticles = {}
 end
 
+-- ─────────────────────────────────────────────────────────────────
+-- Main update loop
+-- ─────────────────────────────────────────────────────────────────
 function GameLoop:update(dt)
     self.pulseTime = self.pulseTime + dt
 
@@ -177,21 +206,58 @@ function GameLoop:update(dt)
         end
     end
 
+    -- Update ML particles (velocity-based, no collision)
+    for i = #self.mlParticles, 1, -1 do
+        local p = self.mlParticles[i]
+        p.lifetime = p.lifetime - dt
+        if p.lifetime <= 0 then
+            table.remove(self.mlParticles, i)
+        else
+            p.x = p.x + p.vx * dt
+            p.y = p.y + p.vy * dt
+            -- Apply drag
+            p.vx = p.vx * 0.95
+            p.vy = p.vy * 0.95
+        end
+    end
+
     if self.state == C.STATE.PLAYING then
         self.waveManager:update(dt)
 
-        -- Update enemies
+        -- Update enemies (with ML tracking and evasion)
         for i = #self.enemies, 1, -1 do
             local enemy = self.enemies[i]
-            enemy:update(dt, PS.run.slowField)
+
+            -- ML: track enemy position for trajectory prediction
+            self.ml:updateEnemy(enemy, dt)
+
+            -- ML: compute evasion steering force
+            local evadeDx, evadeDy, evadeStrength = 0, 0, 0
+            local edx, edy, estr = self.ml:computeEvasion(enemy, self.projectiles, 1, 0, dt)
+            if edx then evadeDx, evadeDy, evadeStrength = edx, edy, estr end
+
+            -- Update enemy with evasion
+            enemy:update(dt, PS.run.slowField, evadeDx, evadeDy, evadeStrength)
+
             if enemy.reachedEnd then
+                -- ML: record evasion failure
+                self.ml:onEnemyReachedEnd(enemy, self.projectiles)
+
                 if PS.run.shieldInstances > 0 then
                     PS.run.shieldInstances = PS.run.shieldInstances - 1
                 else
                     PS.run.hp = PS.run.hp - 1
                 end
                 table.remove(self.enemies, i):destroy()
+
             elseif enemy.dead then
+                -- ML: spawn ML-generated destruction particles
+                self:_spawnMLDestruction(enemy, enemy.damageSource or "none")
+
+                -- ML: record death for targeting + evasion training
+                self.ml:onEnemyDeath(enemy, self.projectiles, enemy.damageSource or "none")
+                self.ml:recordEvasionOutcome(enemy, self.projectiles, false)
+
                 local isBoss = (enemy.typeKey == "BOSS")
                 local baseGold = enemy.def.goldValue
                 local goldMult = self.waveManager.isBonusWave and C.WAVE.BONUS_GOLD_MULT or 1.0
@@ -207,24 +273,49 @@ function GameLoop:update(dt)
             end
         end
 
-        -- Update turrets
+        -- Update turrets (ML targeting + lead targeting)
         for _, turret in ipairs(self.turrets) do
             turret:update(dt, self.enemies, self.projectiles, self)
         end
 
-        -- Update projectiles
+        -- Update projectiles (ML trajectory: record miss when projectile leaves screen)
         for i = #self.projectiles, 1, -1 do
             local proj = self.projectiles[i]
             proj:update(dt, self.enemies, function(p)
                 self:onProjectileHit(p)
             end)
             if proj.dead then
+                -- ML: record miss if projectile died without hitting anything meaningful
+                -- (only count misses when projectile didn't hit any enemy)
+                if not proj.hitSomething then
+                    self.ml:onProjectileMiss(proj)
+                end
                 table.remove(self.projectiles, i):destroy()
             end
         end
 
         -- Check wave clear
         if self.waveManager:isWaveClear() and self.waveManager.waveTransitionTimer <= 0 then
+            -- ML: record wave outcome for difficulty adaptor + train all nets
+            local enemiesKilled = PS.run.enemiesKilled
+            local hpLeft = PS.run.hp
+            local maxHP = C.BASE_HP
+            local clearTime = self.waveManager.waveClearTime or 60
+            local enemiesReached = self.waveManager.enemiesReachedEnd or 0
+
+            self.ml:onWaveEnd(
+                PS.run.wave, true, hpLeft, maxHP,
+                enemiesKilled, clearTime, enemiesReached
+            )
+
+            -- ML stats for HUD
+            self.mlStats.wavesTrained = self.mlStats.wavesTrained + 1
+            self.mlStats.samplesCollected = #self.ml.targeting.trainingBuffer
+
+            -- Update difficulty multipliers for next wave
+            local mults = self.ml:getDifficultyMultipliers(PS.run.wave + 1)
+            self.waveManager:applyMultipliers(mults)
+
             self.state = C.STATE.UPGRADE_SELECT
             self.upgradeChoices = US.getChoices(3, PS)
             self.upgradeScreen:show(self.upgradeChoices)
@@ -234,13 +325,50 @@ function GameLoop:update(dt)
         -- Check player HP
         if PS.run.hp <= 0 then
             PS:bankProgress()
+            self.ml:onRunEnd()
             self.state = C.STATE.MENU
             self:showMenuUI()
         end
     end
 end
 
+-- Spawn ML-generated destruction particles at enemy death location
+function GameLoop:_spawnMLDestruction(enemy, damageSource)
+    local particles = self.ml:generateDestruction(enemy, damageSource)
+    if not particles then
+        -- Fallback: simple effect
+        self:addDeathEffect(enemy.x, enemy.y, enemy.radius,
+            enemy.def.color[1], enemy.def.color[2], enemy.def.color[3])
+        return
+    end
+
+    -- Spawn ML-generated particles into the particle pool
+    for _, p in ipairs(particles) do
+        table.insert(self.mlParticles, {
+            x = enemy.x,
+            y = enemy.y,
+            vx = p.vx,
+            vy = p.vy,
+            size = p.size,
+            r = p.r,
+            g = p.g,
+            b = p.b,
+            lifetime = p.lifetime,
+            maxLifetime = p.lifetime,
+        })
+    end
+
+    -- Also add a central flash (always present regardless of ML system)
+    self:addDeathEffect(enemy.x, enemy.y, enemy.radius * 0.4,
+        enemy.def.color[1], enemy.def.color[2], enemy.def.color[3])
+end
+
+-- ─────────────────────────────────────────────────────────────────
+-- Projectile hit handler
+-- ─────────────────────────────────────────────────────────────────
 function GameLoop:onProjectileHit(proj)
+    proj.hitSomething = true
+
     local special = proj.special
     local enemies = self.enemies
 
@@ -255,10 +383,14 @@ function GameLoop:onProjectileHit(proj)
                 local dist = math.sqrt(dx * dx + dy * dy)
                 if dist < radius then
                     local dmg = dist < 20 and proj.damage or math.floor(proj.damage * ratio)
-                    enemy:takeDamage(dmg)
+                    local killed = enemy:takeDamage(dmg)
+                    if killed then enemy.damageSource = special end
+                    -- ML: record hit for trajectory training
+                    if killed then self.ml:onProjectileHit(proj, enemy) end
                 end
             end
         end
+
     elseif special == "pierce" then
         local def = proj.turretDef
         local count = def.pierceCount or 2
@@ -269,11 +401,14 @@ function GameLoop:onProjectileHit(proj)
                 local dy = enemy.y - proj.y
                 local dist = math.sqrt(dx * dx + dy * dy)
                 if dist < enemy.radius + 15 then
-                    enemy:takeDamage(proj.damage)
+                    local killed = enemy:takeDamage(proj.damage)
+                    if killed then enemy.damageSource = special end
                     hitCount = hitCount + 1
+                    self.ml:onProjectileHit(proj, enemy)
                 end
             end
         end
+
     elseif special == "chain" then
         local def = proj.turretDef
         local chainCount = def.chainCount or 3
@@ -286,9 +421,11 @@ function GameLoop:onProjectileHit(proj)
                 local dy = enemy.y - proj.y
                 local dist = math.sqrt(dx * dx + dy * dy)
                 if dist < 30 then
-                    enemy:takeDamage(proj.damage)
+                    local killed = enemy:takeDamage(proj.damage)
+                    if killed then enemy.damageSource = special end
                     table.insert(hit, enemy)
                     if not first then first = enemy end
+                    self.ml:onProjectileHit(proj, enemy)
                     break
                 end
             end
@@ -315,7 +452,8 @@ function GameLoop:onProjectileHit(proj)
                     end
                 end
                 if nextEnemy then
-                    nextEnemy:takeDamage(chainDmg)
+                    local killed = nextEnemy:takeDamage(chainDmg)
+                    if killed then nextEnemy.damageSource = special end
                     table.insert(hit, nextEnemy)
                     last = nextEnemy
                     chainDmg = math.floor(chainDmg * decay)
@@ -324,9 +462,12 @@ function GameLoop:onProjectileHit(proj)
                 end
             end
         end
+
     else
         if proj.target and not proj.target.dead then
-            proj.target:takeDamage(proj.damage)
+            local killed = proj.target:takeDamage(proj.damage)
+            if killed then proj.target.damageSource = "none" end
+            self.ml:onProjectileHit(proj, proj.target)
         end
     end
 end
@@ -336,6 +477,18 @@ function GameLoop:onUpgradeSelected(upgradeId)
     self.upgradeScreen:hide()
     self.showingUpgrade = false
     PS.run.wave = PS.run.wave + 1
+
+    -- ML: update difficulty based on turret upgrade
+    local turretLevel = 1
+    for typeKey, lvl in pairs(PS.data.turretLevels) do
+        if lvl > turretLevel then turretLevel = lvl end
+    end
+    self.ml:onTurretUpgrade(turretLevel)
+
+    -- Apply new difficulty multipliers
+    local mults = self.ml:getDifficultyMultipliers(PS.run.wave)
+    self.waveManager:applyMultipliers(mults)
+
     self.waveManager:startNextWave(PS.run.wave)
     self.waveStartGold = PS.run.gold
     self.state = C.STATE.PLAYING
@@ -404,18 +557,14 @@ end
 -- Back button / escape key handler
 function GameLoop:onBack()
     if self.showingUpgrade then
-        -- Can't go back from upgrade selection
-        return
+        return  -- Can't go back from upgrade selection
     end
     if self.showingPause then
-        -- Resume from pause
         self.pauseMenu:hide()
         self.showingPause = false
         self.state = C.STATE.PLAYING
     elseif self.state == C.STATE.PLAYING then
         self:onPauseTap()
-    elseif self.state == C.STATE.PAUSED then
-        -- Already handled above
     end
 end
 
@@ -430,7 +579,7 @@ function GameLoop:hideMenuUI()
 end
 
 function GameLoop:addDeathEffect(x, y, r, cr, cg, cb)
-    -- Burst particles
+    -- Burst particles (legacy style + ML blend)
     for i = 1, 8 do
         local angle = (i / 8) * math.pi * 2
         local dist = r * 1.5
@@ -495,7 +644,14 @@ function GameLoop:draw()
         end
     end
 
-    -- Death effects
+    -- ML death particles
+    for _, p in ipairs(self.mlParticles) do
+        local alpha = p.lifetime / math.max(0.001, p.maxLifetime)
+        love.graphics.setColor(p.r, p.g, p.b, alpha)
+        love.graphics.circle("fill", p.x, p.y, p.size * alpha)
+    end
+
+    -- Death effects (legacy circles)
     for _, e in ipairs(self.deathEffects) do
         local alpha = e.timer / e.totalTimer
         love.graphics.setColor(e.cr, e.cg, e.cb, alpha)
@@ -506,10 +662,8 @@ function GameLoop:draw()
     -- Muzzle flashes
     for _, m in ipairs(self.muzzleFlashes) do
         local alpha = m.timer / m.totalTimer
-        -- White flash
         love.graphics.setColor(1, 1, 1, alpha * 0.9)
         love.graphics.circle("fill", m.x, m.y, m.r * 0.5 * (1 + (1 - alpha) * 2))
-        -- Color flash
         love.graphics.setColor(m.cr, m.cg, m.cb, alpha)
         love.graphics.circle("fill", m.x, m.y, m.r * 0.3 * (1 + (1 - alpha) * 3))
     end

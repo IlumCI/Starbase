@@ -299,7 +299,7 @@ function Enemy:renderBoss(fr, fg, fb, r)
     end
 end
 
-function Enemy:update(dt, slowField)
+function Enemy:update(dt, slowField, evadeDx, evadeDy, evadeStrength)
     if self.dead or self.reachedEnd then return end
 
     -- Speed with slow field
@@ -310,6 +310,26 @@ function Enemy:update(dt, slowField)
 
     -- Movement along path
     local movement = (speed / self.pathLength) * dt
+
+    -- Apply ML evasion steering (perpendicular to path)
+    if evadeDx and evadeDy and evadeStrength and evadeStrength > 0 then
+        -- Scale evasion by strength, cap it
+        local strength = math.min(evadeStrength, 80)
+        self.x = self.x + evadeDx * strength * dt
+        self.y = self.y + evadeDy * strength * dt
+    end
+    if ml and projectiles then
+        -- Get path direction at current progress
+        local pathDirX, pathDirY = self:_getPathDirection()
+        evadeX, evadeY = ml:computeEvasion(self, projectiles, pathDirX, pathDirY, dt)
+    end
+
+    -- Movement along path
+    local movement = (speed / self.pathLength) * dt
+
+    -- Apply ML evasion steering (small perpendicular displacement)
+    -- Scale evasion to be subtle (doesn't override path following)
+    local evadeScale = dt * 30
     self.progress = self.progress + movement
 
     if self.progress >= 1 then
@@ -319,17 +339,27 @@ function Enemy:update(dt, slowField)
         self.y = self.waypoints[#self.waypoints].y
     else
         local pos = Path.getPositionAtProgress(self.progress, self.waypoints)
-        self.x = pos.x
-        self.y = pos.y
+        self.x = pos.x + evadeX * evadeScale
+        self.y = pos.y + evadeY * evadeScale
     end
+
+    -- Clamp to screen bounds
+    self.x = math.max(0, math.min(C.WIDTH, self.x))
+    self.y = math.max(0, math.min(C.HEIGHT, self.y))
 
     -- Animation
     self.wobblePhase = self.wobblePhase + dt * 2.5
     self.pulsePhase = self.wobblePhase
 
-    -- Wobble rotation
+    -- Wobble rotation (add evasion rotation for visual flair)
     local wobble = math.sin(self.wobblePhase) * 2.5 * math.pi / 180
-    self.rotation = wobble
+    local evadeRot = (evadeX + evadeY) * 0.01  -- subtle rotation from evasion
+    self.rotation = wobble + evadeRot
+
+    -- Evasion cooldown update
+    if self.evadeTimer and self.evadeTimer > 0 then
+        self.evadeTimer = self.evadeTimer - dt
+    end
 
     -- Flash timer
     if self.flashTimer > 0 then
@@ -354,6 +384,22 @@ function Enemy:update(dt, slowField)
 
     -- Rebuild visuals
     self:buildVisuals()
+end
+
+-- Get unit direction vector along path at current progress
+function Enemy:_getPathDirection()
+    local idx = self.waypointIdx or 1
+    if idx >= #self.waypoints then
+        return 1, 0  -- default forward
+    end
+    local wp1 = self.waypoints[idx]
+    local wp2 = self.waypoints[idx + 1]
+    if not wp1 or not wp2 then return 1, 0 end
+    local dx = wp2.x - wp1.x
+    local dy = wp2.y - wp1.y
+    local len = math.sqrt(dx * dx + dy * dy)
+    if len < 1 then return 1, 0 end
+    return dx / len, dy / len
 end
 
 function Enemy:takeDamage(amount)

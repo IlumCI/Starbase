@@ -34,6 +34,22 @@ function WM:reset()
     self.waveCleared = false
     self.waveActive = false
     self.waveTransitionTimer = C.WAVE.WAVE_TRANSITION_TIME
+    -- ML difficulty multipliers (applied to enemy HP/speed/spawn)
+    self.hpMultiplier = 1.0
+    self.speedMultiplier = 1.0
+    self.spawnIntervalMult = 1.0
+    -- Wave timing stats
+    self.waveClearTime = 0
+    self.enemiesReachedEnd = 0
+    self.waveStartTime = 0
+end
+
+-- Apply ML difficulty multiplier adjustments
+function WM:applyMultipliers(mults)
+    mults = mults or {}
+    self.hpMultiplier = mults.hpMultiplier or 1.0
+    self.speedMultiplier = mults.speedMultiplier or 1.0
+    self.spawnIntervalMult = mults.spawnIntervalMult or 1.0
 end
 
 function WM:startNextWave(currentWave)
@@ -113,12 +129,20 @@ function WM:update(dt)
         if #self.spawnQueue > 0 then
             local etype = table.remove(self.spawnQueue, 1)
             local enemy = Enemy.new(etype, self.waveNumber, self.isBonusWave)
+            -- Apply ML-driven difficulty multipliers
+            if self.hpMultiplier ~= 1.0 then
+                enemy.maxHealth = enemy.maxHealth * self.hpMultiplier
+                enemy.health = enemy.maxHealth
+            end
+            if self.speedMultiplier ~= 1.0 then
+                enemy.speed = enemy.speed * self.speedMultiplier
+            end
             table.insert(self.gameLoop.enemies, enemy)
             self.waveEnemiesSpawned = self.waveEnemiesSpawned + 1
         end
-        -- Compute next spawn interval
+        -- Compute next spawn interval (ML can slow or accelerate spawns)
         local baseInterval = C.WAVE.SPAWN_INTERVAL_BASE + self.waveNumber * C.WAVE.SPAWN_INTERVAL_SCALE
-        self.spawnTimer = math.max(C.WAVE.SPAWN_INTERVAL_MIN, baseInterval)
+        self.spawnTimer = math.max(C.WAVE.SPAWN_INTERVAL_MIN, baseInterval * self.spawnIntervalMult)
     end
 end
 
@@ -127,7 +151,17 @@ function WM:onEnemyKilled()
     if self.waveEnemiesKilled >= self.waveEnemiesTotal and #self.spawnQueue == 0 then
         self.waveCleared = true
         self.waveActive = false
+        self.waveClearTime = self.waveClearTime + (os.clock() - self.waveStartTime)
     end
+end
+
+function WM:onEnemyReachedEnd()
+    self.enemiesReachedEnd = self.enemiesReachedEnd + 1
+end
+
+function WM:onWaveStart()
+    self.waveStartTime = os.clock()
+    self.enemiesReachedEnd = 0
 end
 
 function WM:isWaveClear()

@@ -12,8 +12,11 @@ function HUD.new(gameLoop)
     self.visible = false
     self.waveNumber = 1
 
-    -- Pause button hitbox (set after canvas creation)
+    -- Pause button hitbox
     self.pauseBtn = { x = 30, y = C.HEIGHT - 62, w = 80, h = 44 }
+
+    -- IR toggle button (top right area)
+    self.irBtn = { x = C.WIDTH - 50, y = C.HEIGHT - 62, w = 44, h = 44 }
 
     self:buildCanvas()
     return self
@@ -111,6 +114,19 @@ function HUD:update(waveNumber)
         love.graphics.setColor(unpack(C.COLOR.ACCENT))
         love.graphics.print("LV." .. PS.data.playerLevel, C.WIDTH - 60, C.HEIGHT - 60)
 
+        -- IR toggle button (eye icon)
+        local irColor = self.gameLoop and self.gameLoop.irMode and {0.3, 1.0, 0.5} or {0.3, 0.3, 0.4}
+        local ib = self.irBtn
+        love.graphics.setColor(0.1, 0.1, 0.15, 1)
+        love.graphics.rectangle("fill", ib.x, ib.y, ib.w, ib.h)
+        love.graphics.setColor(unpack(irColor))
+        love.graphics.rectangle("line", ib.x, ib.y, ib.w, ib.h)
+        -- Eye symbol (circle + dot)
+        love.graphics.setColor(unpack(irColor))
+        love.graphics.setLineWidth(1.5)
+        love.graphics.ellipse("line", ib.x + ib.w/2, ib.y + ib.h/2, ib.w * 0.35, ib.h * 0.25)
+        love.graphics.circle("fill", ib.x + ib.w/2, ib.y + ib.h/2, 3)
+
         -- Pause button
         love.graphics.setColor(0.2, 0.2, 0.3, 1)
         love.graphics.rectangle("fill", self.pauseBtn.x, self.pauseBtn.y, self.pauseBtn.w, self.pauseBtn.h)
@@ -142,10 +158,19 @@ function HUD:destroy()
 end
 
 function HUD:onPress(x, y)
+    -- IR toggle button
+    local irBtn = self.irBtn
+    if x >= irBtn.x and x <= irBtn.x + irBtn.w and y >= irBtn.y and y <= irBtn.y + irBtn.h then
+        self.gameLoop.irMode = not self.gameLoop.irMode
+        self.gameLoop.irEnabled = self.gameLoop.irMode
+        return { irBtn.x, irBtn.y, irBtn.w, irBtn.h, 0.1, 0.6, 0.3 }
+    end
+
+    -- Pause button
     local btn = self.pauseBtn
     if x >= btn.x and x <= btn.x + btn.w and y >= btn.y and y <= btn.y + btn.h then
         self.gameLoop:onPauseTap()
-        return { btn.x, btn.y, btn.w, btn.h, 0.4, 0.4, 0.5 }
+        return { x = btn.x, y = btn.y, w = btn.w, h = btn.h, r = 0.4, g = 0.4, b = 0.5 }
     end
     return nil
 end
