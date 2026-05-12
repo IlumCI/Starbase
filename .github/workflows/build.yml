@@ -41,10 +41,11 @@ jobs:
 
       - name: Build APK via love-android gradle template
         env:
-          JAVA_HOME: ${{ steps.java.outputs.java-home }}
+          JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.18-8/x64
         run: |
           set -e
           echo "JAVA_HOME=$JAVA_HOME"
+          echo "JAVA_HOME_17_X64=$JAVA_HOME_17_X64"
 
           # Ubuntu-latest already has Android SDK at this path
           export ANDROID_HOME=/usr/local/lib/android/sdk
@@ -57,14 +58,15 @@ jobs:
           # Accept SDK licenses
           yes 2>/dev/null | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
 
+          # Package game.love (from repo root, absolute path)
+          zip -r /tmp/game.love src/
+
+          # Clone love-android template
           git clone https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/love2d-community/love-android.git /tmp/love-android --depth 1
+          git -C /tmp/love-android submodule update --init --recursive 2>/dev/null || true
 
           # Inject game.love into template assets
-          mkdir -p /tmp/love-android/game/src/main/assets
-          cd src
-          zip -r /tmp/love-android/game/src/main/assets/game.love .
-          cd ..
-
+          cp /tmp/game.love /tmp/love-android/game/src/main/assets/game.love
           echo "game.love size: $(du -h /tmp/love-android/game/src/main/assets/game.love | cut -f1)"
 
           # Configure gradle.properties
